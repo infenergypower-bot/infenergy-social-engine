@@ -18,6 +18,7 @@ from social import living_intelligence  # noqa: E402
 def _asset_handler(path):
     handler = object.__new__(worker.HealthHandler)
     handler.path = path
+    handler.headers = {}
     handler.wfile = BytesIO()
     handler.statuses = []
     handler.headers_sent = {}
@@ -46,6 +47,85 @@ def test_approved_asset_route_serves_images_for_get_and_head(monkeypatch, tmp_pa
     assert head_handler.statuses == [200]
     assert head_handler.headers_sent["Content-Length"] == str(len(payload))
     assert head_handler.wfile.getvalue() == b""
+
+
+def test_media_route_streams_in_bounded_chunks(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    media = tmp_path / "public_media"
+    media.mkdir()
+    payload = b"x" * (1024 * 1024)
+    (media / "creative.png").write_bytes(payload)
+
+    class RecordingWriter(BytesIO):
+        def __init__(self):
+            super().__init__()
+            self.largest_write = 0
+
+        def write(self, chunk):
+            self.largest_write = max(self.largest_write, len(chunk))
+            return super().write(chunk)
+
+    handler = _asset_handler("/media/creative.png")
+    handler.wfile = RecordingWriter()
+    handler.headers = {}
+
+    handler.do_GET()
+
+    assert handler.statuses == [200]
+    assert handler.wfile.getvalue() == payload
+    assert handler.wfile.largest_write <= 256 * 1024
+    assert handler.headers_sent["ETag"]
+
+
+def test_media_route_honors_matching_etag(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    media = tmp_path / "public_media"
+    media.mkdir()
+    path = media / "creative.png"
+    path.write_bytes(b"approved-image")
+    etag = worker.HealthHandler._media_etag(path.stat())
+
+    handler = _asset_handler("/media/creative.png")
+    handler.headers = {"If-None-Match": etag}
+
+    handler.do_GET()
+
+    assert handler.statuses == [304]
+    assert handler.headers_sent["ETag"] == etag
+    assert handler.wfile.getvalue() == b""
+
+
+def test_media_route_serves_requested_byte_range(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    media = tmp_path / "public_media"
+    media.mkdir()
+    (media / "creative.mp4").write_bytes(b"0123456789")
+
+    handler = _asset_handler("/media/creative.mp4")
+    handler.headers = {"Range": "bytes=2-5"}
+
+    handler.do_GET()
+
+    assert handler.statuses == [206]
+    assert handler.headers_sent["Content-Range"] == "bytes 2-5/10"
+    assert handler.headers_sent["Content-Length"] == "4"
+    assert handler.wfile.getvalue() == b"2345"
+
+
+def test_media_route_rejects_invalid_byte_range(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    media = tmp_path / "public_media"
+    media.mkdir()
+    (media / "creative.mp4").write_bytes(b"0123456789")
+
+    handler = _asset_handler("/media/creative.mp4")
+    handler.headers = {"Range": "bytes=20-30"}
+
+    handler.do_GET()
+
+    assert handler.statuses == [416]
+    assert handler.headers_sent["Content-Range"] == "bytes */10"
+    assert handler.wfile.getvalue() == b""
 
 
 def test_approved_asset_route_rejects_non_images(monkeypatch, tmp_path):

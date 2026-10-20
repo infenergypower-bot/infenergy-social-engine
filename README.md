@@ -68,6 +68,25 @@ All operational preview and control endpoints use the same `MANUAL_RUN_TOKEN` pr
 - `ENTERTAINMENT_STUDIO_URL` (optional; enables canonical Eleven/LUX production through the Studio)
 - `ENTERTAINMENT_STUDIO_TOKEN` (required with `ENTERTAINMENT_STUDIO_URL`; must equal the Studio's `SOCIAL_ENGINE_TOKEN`)
 - `ENTERTAINMENT_STUDIO_IMAGE_PROVIDER` (`openai` by default; use `deterministic` only for local contract testing)
+- `HTTP_MAX_CONCURRENT_REQUESTS` (default `8`; caps simultaneous HTTP handlers to bound memory during media bursts)
+
+## Railway Resource Controls
+
+The worker streams `/media/` and `/approved-assets/` responses in bounded chunks, supports byte
+ranges for video playback, and returns an `ETag` so repeat requests can use `304 Not Modified`.
+Do not replace these routes with
+whole-file reads: concurrent image or video requests otherwise multiply each file's size in
+resident memory.
+
+For the Social Engine service, keep `HTTP_MAX_CONCURRENT_REQUESTS=8` unless Railway metrics show
+that the instance has enough memory for more simultaneous transfers. Lower it to `4` on a
+memory-constrained instance. Autonomous generation and scheduled publishing remain enabled; the
+limit only queues excess HTTP requests.
+
+Generated media under `DATA_DIR/public_media` is durable publication state. Back up the attached
+volume before deleting files, and prune only assets that are no longer referenced by READY,
+CLAIMED, PUBLISHING, or externally published packages. For large long-term libraries, use object
+storage plus a CDN instead of serving the volume directly from Railway.
 
 ## Entertainment Studio Routing
 

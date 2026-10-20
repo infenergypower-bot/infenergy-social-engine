@@ -1335,6 +1335,70 @@ def resume_deferred_run(*, recover_stale: bool = False) -> dict:
 
 
 class HealthHandler(BaseHTTPRequestHandler):
+    @staticmethod
+    def _media_etag(stat_result: os.stat_result) -> str:
+        return f'"{stat_result.st_mtime_ns:x}-{stat_result.st_size:x}"'
+
+    def _serve_file(self, path: str, *, head_only: bool = False) -> None:
+        stat_result = os.stat(path)
+        etag = self._media_etag(stat_result)
+        mime, _ = mimetypes.guess_type(path)
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+
+        start = 0
+        end = stat_result.st_size - 1
+        range_header = str(self.headers.get("Range") or "").strip()
+        if range_header:
+            try:
+                unit, requested = range_header.split("=", 1)
+                if unit != "bytes" or "," in requested:
+                    raise ValueError
+                first, last = requested.split("-", 1)
+                if first:
+                    start = int(first)
+                    end = int(last) if last else end
+                else:
+                    suffix_length = int(last)
+                    if suffix_length <= 0:
+                        raise ValueError
+                    start = max(0, stat_result.st_size - suffix_length)
+                end = min(end, stat_result.st_size - 1)
+                if start < 0 or start > end:
+                    raise ValueError
+            except (TypeError, ValueError):
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{stat_result.st_size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+
+        content_length = end - start + 1
+        self.send_response(206 if range_header else 200)
+        self.send_header("Content-Type", mime or "application/octet-stream")
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        self.send_header("ETag", etag)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(content_length))
+        if range_header:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{stat_result.st_size}")
+        self.end_headers()
+        if head_only:
+            return
+        with open(path, "rb") as source:
+            source.seek(start)
+            remaining = content_length
+            while remaining:
+                chunk = source.read(min(256 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
     def do_POST(self):
         self.do_GET()
 
@@ -1355,12 +1419,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
-        mime, _ = mimetypes.guess_type(media_path)
-        self.send_response(200)
-        self.send_header("Content-Type", mime or "application/octet-stream")
-        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-        self.send_header("Content-Length", str(os.path.getsize(media_path)))
-        self.end_headers()
+        self._serve_file(media_path, head_only=True)
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -1473,15 +1532,7 @@ class HealthHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
 
-            with open(media_path, "rb") as f:
-                payload = f.read()
-            mime, _ = mimetypes.guess_type(media_path)
-            self.send_response(200)
-            self.send_header("Content-Type", mime or "application/octet-stream")
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            self._serve_file(media_path)
             return
 
         if parsed.path.startswith("/approved-assets/"):
@@ -1490,15 +1541,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             if not file_name or os.path.splitext(file_name)[1].lower() not in {".png", ".jpg", ".jpeg"} or not os.path.isfile(media_path):
                 self.send_error(404)
                 return
-            with open(media_path, "rb") as asset_file:
-                payload = asset_file.read()
-            mime, _ = mimetypes.guess_type(media_path)
-            self.send_response(200)
-            self.send_header("Content-Type", mime or "application/octet-stream")
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            self._serve_file(media_path)
             return
 
         if parsed.path in ("/", "/health", "/healthz"):
@@ -2645,9 +2688,32 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, server_address, request_handler_class):
+        super().__init__(server_address, request_handler_class)
+        configured = int(os.environ.get("HTTP_MAX_CONCURRENT_REQUESTS", "8"))
+        self._request_slots = threading.BoundedSemaphore(max(1, min(configured, 64)))
+
+    def process_request(self, request, client_address) -> None:
+        self._request_slots.acquire()
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
 def start_health_server() -> None:
     port = int(os.environ.get("PORT", "8080"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+    server = BoundedThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"Health endpoint listening on 0.0.0.0:{port}")
