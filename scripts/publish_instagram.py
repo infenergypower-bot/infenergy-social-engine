@@ -5,7 +5,7 @@ import mimetypes
 import requests
 from urllib.parse import urljoin, urlparse
 
-from social_visuals import review_rendered_visual
+from social_visuals import review_rendered_visual, strict_artifact_review_platform
 from url_safety import is_safe_http_url
 
 GRAPH_BASE = "https://graph.facebook.com/v26.0"
@@ -311,9 +311,10 @@ def publish(content: dict, dry_run: bool = False) -> dict:
     }
 
     candidates = []
+    review_platform = strict_artifact_review_platform(content, "instagram")
     if generated_image_path and os.path.exists(generated_image_path):
         if require_gemini:
-            review = review_rendered_visual(generated_image_path, "instagram")
+            review = review_rendered_visual(generated_image_path, review_platform)
             if review.get("verdict") != "PASS":
                 issues = ",".join(str(issue) for issue in review.get("issues", [])) or "artifact_review_failed"
                 return {"id": "skipped", "reason": f"strict_gemini_artifact_invalid:{issues}"}
@@ -372,7 +373,7 @@ def publish(content: dict, dry_run: bool = False) -> dict:
         public_url = str(asset.get("public_url") or "").strip()
         local_path = str(asset.get("local_path") or "").strip()
         if require_gemini:
-            review = review_rendered_visual(local_path, "instagram")
+            review = review_rendered_visual(local_path, review_platform)
             if asset.get("render_engine") != "gemini" or public_url not in strict_public_urls or review.get("verdict") != "PASS":
                 return {"id": "skipped", "reason": "strict_gemini_carousel_artifact_invalid"}
         if _is_valid_public_image(public_url):

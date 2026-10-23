@@ -259,6 +259,57 @@ class PublisherVisualTests(unittest.TestCase):
                     "https://example.com",
                 )
 
+    def test_facebook_strict_carousel_uses_carousel_dimensions(self) -> None:
+        with patch.object(
+            publish_facebook,
+            "review_rendered_visual",
+            return_value={"verdict": "REGENERATE_VISUAL", "issues": ["rendered_scanline_corruption"]},
+        ) as review:
+            with self.assertRaisesRegex(RuntimeError, "facebook_strict_gemini_artifact_invalid"):
+                publish_facebook.publish(
+                    {
+                        "fb_caption": "Caption",
+                        "gemini_generation": {"strict_provider": True, "aspect_ratio": "4:5"},
+                        "generated_visuals": {"facebook": "missing.png"},
+                    },
+                    "https://example.com",
+                )
+
+        review.assert_called_once_with("missing.png", "iis_carousel")
+
+    def test_instagram_strict_carousel_uses_carousel_dimensions(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".png") as image_file, patch.dict(
+            os.environ,
+            {"IG_VALIDATE_IMAGE_URLS": "false"},
+            clear=False,
+        ), patch.object(
+            publish_instagram,
+            "review_rendered_visual",
+            return_value={"verdict": "PASS", "issues": []},
+        ) as review:
+            result = publish_instagram.publish(
+                {
+                    "ig_caption": "Caption",
+                    "gemini_generation": {
+                        "strict_provider": True,
+                        "aspect_ratio": "4:5",
+                        "assets": [{
+                            "render_engine": "gemini",
+                            "public_url": "https://example.com/media/reviewed.png",
+                        }],
+                    },
+                    "generated_visuals": {
+                        "instagram": image_file.name,
+                        "render_engines": {"instagram": "gemini"},
+                    },
+                    "primary_publish_image_url": "https://example.com/media/reviewed.png",
+                },
+                dry_run=True,
+            )
+
+        self.assertEqual(result["id"], "dry-run")
+        review.assert_called_once_with(image_file.name, "iis_carousel")
+
     def test_facebook_owner_supplied_visual_bypasses_generated_artifact_gate(self) -> None:
         upload_response = Mock(ok=True)
         upload_response.json.return_value = {"id": "photo-1"}

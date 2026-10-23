@@ -3,7 +3,7 @@ import os
 import time
 import requests
 
-from social_visuals import review_rendered_visual
+from social_visuals import review_rendered_visual, strict_artifact_review_platform
 
 GRAPH_BASE = "https://graph.facebook.com/v26.0"
 
@@ -268,8 +268,9 @@ def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
         if carousel_assets and len(carousel_paths) != len(carousel_assets):
             raise RuntimeError("facebook_strict_gemini_carousel_incomplete")
         paths_to_publish = carousel_paths if len(carousel_paths) >= 2 else [image_path]
+        review_platform = strict_artifact_review_platform(content, "facebook")
         for path in paths_to_publish:
-            review = review_rendered_visual(path, "facebook")
+            review = review_rendered_visual(path, review_platform)
             if review.get("verdict") != "PASS":
                 issues = ",".join(str(issue) for issue in review.get("issues", [])) or "artifact_review_failed"
                 raise RuntimeError(f"facebook_strict_gemini_artifact_invalid:{issues}")

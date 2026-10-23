@@ -436,6 +436,7 @@ def _platform_visual_spec(platform: str) -> dict[str, Any]:
             "product_zone": "right 38%, grounded in the lower half",
             "scene": "bold mobile-first lifestyle setting with strong depth and one clear focal path",
         }
+
     return {
         "target": (1200, 1200),
         "aspect_ratio": "1:1",
@@ -443,6 +444,14 @@ def _platform_visual_spec(platform: str) -> dict[str, Any]:
         "product_zone": "right 38%, grounded in the lower half",
         "scene": "credible premium household preparedness setting with useful environmental context",
     }
+
+
+def strict_artifact_review_platform(content: dict[str, Any], default_platform: str) -> str:
+    generation = content.get("gemini_generation") if isinstance(content.get("gemini_generation"), dict) else {}
+    return {
+        "4:5": "iis_carousel",
+        "9:16": "iis_reel_cover",
+    }.get(str(generation.get("aspect_ratio") or "").strip(), default_platform)
 
 
 def _gemini_plate_quality(image: Any, platform: str) -> tuple[bool, list[str]]:

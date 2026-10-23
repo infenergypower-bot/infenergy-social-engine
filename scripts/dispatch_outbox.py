@@ -14,7 +14,7 @@ import publish_instagram
 import publish_linkedin
 from platform_publishing import get_status as get_platform_status
 from social import model_router
-from social_visuals import build_product_image_approval, generate_strict_gemini_image, review_rendered_visual
+from social_visuals import build_product_image_approval, generate_strict_gemini_image, review_rendered_visual, strict_artifact_review_platform
 from build_monthly_content import _captions, _gemini_generation_plan, _load_current_news
 from content_operations import (
     PLATFORMS,
@@ -209,11 +209,7 @@ def _strict_publish_artifact_error(package: dict[str, Any], platform: str) -> st
         return ""
     visuals = package.get("generated_visuals") if isinstance(package.get("generated_visuals"), dict) else {}
     artifact_path = str(visuals.get(platform) or "").strip()
-    review_platform = {
-        "4:5": "iis_carousel",
-        "9:16": "iis_reel_cover",
-    }.get(str(generation.get("aspect_ratio") or "").strip(), "instagram")
-    review = review_rendered_visual(artifact_path, review_platform)
+    review = review_rendered_visual(artifact_path, strict_artifact_review_platform(package, "instagram"))
     if review.get("verdict") == "PASS":
         return ""
     issues = review.get("issues") if isinstance(review.get("issues"), list) else []
