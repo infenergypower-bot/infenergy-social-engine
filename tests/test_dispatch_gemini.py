@@ -385,7 +385,7 @@ def test_dispatch_never_generates_when_preparation_is_incomplete(monkeypatch):
     monkeypatch.setattr(
         dispatch_outbox,
         "claim_due",
-        lambda data_dir, now_utc: {"outbox_id": "outbox-1", "scheduled_at": "2026-08-23T16:00:00+00:00", "package": _package(carousel=False)},
+        lambda data_dir, now_utc, **kwargs: {"outbox_id": "outbox-1", "scheduled_at": "2026-08-23T16:00:00+00:00", "package": _package(carousel=False)},
     )
     generation = Mock()
     monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", generation)
@@ -456,7 +456,7 @@ def test_dispatch_preflights_all_strict_artifacts_before_any_publisher_call(monk
     monkeypatch.setattr(
         dispatch_outbox,
         "claim_due",
-        lambda data_dir, now_utc: {"outbox_id": "outbox-1", "scheduled_at": "2026-08-23T16:00:00+00:00", "package": package},
+        lambda data_dir, now_utc, **kwargs: {"outbox_id": "outbox-1", "scheduled_at": "2026-08-23T16:00:00+00:00", "package": package},
     )
     monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", lambda package, data_dir: package)
     monkeypatch.setattr(dispatch_outbox, "update_claimed_package", lambda *args: None)
@@ -467,13 +467,19 @@ def test_dispatch_preflights_all_strict_artifacts_before_any_publisher_call(monk
         "review_rendered_visual",
         lambda path, platform: {"verdict": "REGENERATE_VISUAL", "issues": ["rendered_scanline_corruption"]},
     )
-    monkeypatch.setattr(dispatch_outbox, "release_outbox", lambda data_dir, outbox_id, error: recovered.append(error))
+    retry_schedule = []
+    monkeypatch.setattr(
+        dispatch_outbox,
+        "release_outbox",
+        lambda data_dir, outbox_id, error, **kwargs: (recovered.append(error), retry_schedule.append(kwargs)),
+    )
     monkeypatch.setattr(dispatch_outbox, "_publish", lambda package, platform: published.append(platform))
 
     result = dispatch_outbox.dispatch_due(data_dir="unused", now_utc="2026-08-23T17:00:00+00:00")
 
     assert result["status"] == "RETRYABLE_FAILURE"
     assert "facebook_strict_artifact_invalid:rendered_scanline_corruption" in recovered[0]
+    assert retry_schedule == [{"next_attempt_at": "2026-08-23T17:30:00+00:00"}]
     assert published == []
 
 
@@ -491,6 +497,21 @@ def test_shared_square_gemini_artifact_is_valid_for_linkedin_dispatch(monkeypatc
     assert reviewed_platforms == ["instagram"]
 
 
+def test_shared_carousel_artifact_uses_its_generation_dimensions_for_dispatch(monkeypatch):
+    package = _package(carousel=True)
+    package["gemini_generation"]["aspect_ratio"] = "4:5"
+    package["generated_visuals"] = {"facebook": "gemini-carousel.png"}
+    reviewed_platforms = []
+    monkeypatch.setattr(
+        dispatch_outbox,
+        "review_rendered_visual",
+        lambda path, platform: reviewed_platforms.append(platform) or {"verdict": "PASS", "issues": []},
+    )
+
+    assert dispatch_outbox._strict_publish_artifact_error(package, "facebook") == ""
+    assert reviewed_platforms == ["iis_carousel"]
+
+
 def test_linkedin_preflight_failure_blocks_facebook_and_instagram(monkeypatch):
     package = _package(carousel=False)
     package["gemini_generation"].update({"status": "COMPLETE", "assets": []})
@@ -500,7 +521,7 @@ def test_linkedin_preflight_failure_blocks_facebook_and_instagram(monkeypatch):
     monkeypatch.setattr(
         dispatch_outbox,
         "claim_due",
-        lambda data_dir, now_utc: {"outbox_id": "outbox-1", "scheduled_at": "2026-08-23T16:00:00+00:00", "package": package},
+        lambda data_dir, now_utc, **kwargs: {"outbox_id": "outbox-1", "scheduled_at": "2026-08-23T16:00:00+00:00", "package": package},
     )
     monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", lambda package, data_dir: package)
     monkeypatch.setattr(dispatch_outbox, "update_claimed_package", lambda *args: None)
@@ -510,7 +531,7 @@ def test_linkedin_preflight_failure_blocks_facebook_and_instagram(monkeypatch):
         "_strict_publish_artifact_error",
         lambda package, platform: "linkedin_strict_artifact_invalid:damaged" if platform == "linkedin" else "",
     )
-    monkeypatch.setattr(dispatch_outbox, "release_outbox", lambda data_dir, outbox_id, error: released.append(error))
+    monkeypatch.setattr(dispatch_outbox, "release_outbox", lambda data_dir, outbox_id, error, **kwargs: released.append(error))
     monkeypatch.setattr(dispatch_outbox, "_publish", lambda package, platform: published.append(platform))
 
     result = dispatch_outbox.dispatch_due(data_dir="unused", now_utc="2026-08-23T17:00:00+00:00")

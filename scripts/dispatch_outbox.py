@@ -209,7 +209,11 @@ def _strict_publish_artifact_error(package: dict[str, Any], platform: str) -> st
         return ""
     visuals = package.get("generated_visuals") if isinstance(package.get("generated_visuals"), dict) else {}
     artifact_path = str(visuals.get(platform) or "").strip()
-    review = review_rendered_visual(artifact_path, "instagram")
+    review_platform = {
+        "4:5": "iis_carousel",
+        "9:16": "iis_reel_cover",
+    }.get(str(generation.get("aspect_ratio") or "").strip(), "instagram")
+    review = review_rendered_visual(artifact_path, review_platform)
     if review.get("verdict") == "PASS":
         return ""
     issues = review.get("issues") if isinstance(review.get("issues"), list) else []
@@ -637,8 +641,14 @@ def dispatch_due(
     for platform in due_platforms:
         artifact_error = _strict_publish_artifact_error(package, platform)
         if artifact_error:
-            release_outbox(data_dir, outbox_id, artifact_error)
-            return {"status": "RETRYABLE_FAILURE", "outbox_id": outbox_id, "error": artifact_error}
+            retry_at = now + timedelta(minutes=30)
+            release_outbox(data_dir, outbox_id, artifact_error, next_attempt_at=retry_at.isoformat())
+            return {
+                "status": "RETRYABLE_FAILURE",
+                "outbox_id": outbox_id,
+                "error": artifact_error,
+                "next_attempt_at": retry_at.isoformat(),
+            }
 
     results: dict[str, Any] = {}
     retry_errors: list[str] = []
