@@ -1287,6 +1287,30 @@ def upcoming_ready_packages(
         connection.close()
 
 
+def ready_package_for_preparation(data_dir: str, outbox_id: str) -> dict[str, Any] | None:
+    connection = _connect(data_dir)
+    try:
+        row = connection.execute(
+            """
+            SELECT outbox_id, scheduled_at, lifecycle_state, package_json FROM content_outbox
+            WHERE outbox_id=? AND status='READY'
+                AND lifecycle_state IN ('PREPARATION_REQUIRED', 'QA_REJECTED', 'READY_TO_DISPATCH', 'FAILED_PREPARATION', 'BLOCKED_BUDGET')
+            LIMIT 1
+            """,
+            (outbox_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "outbox_id": str(row["outbox_id"]),
+            "scheduled_at": str(row["scheduled_at"]),
+            "lifecycle_state": str(row["lifecycle_state"]),
+            "package": _decode(row["package_json"], {}),
+        }
+    finally:
+        connection.close()
+
+
 def update_ready_package(data_dir: str, outbox_id: str, package: dict[str, Any]) -> bool:
     connection = _connect(data_dir)
     try:

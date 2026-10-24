@@ -1238,17 +1238,19 @@ def register_core_capabilities(registry: CapabilityRegistry, policies: PolicyEng
             from content_operations import operations_readiness
             return {"would_dispatch_due": True, "outbox_id": outbox_id, "publish_now": publish_now, "readiness": operations_readiness(context.data_dir), "production_mutated": False}
         return dispatch_due(data_dir=context.data_dir, outbox_id=outbox_id, force=publish_now)
-    def publication_prepare_next(_: dict[str, Any], context: ExecutionContext) -> dict[str, Any]:
+    def publication_prepare_next(payload: dict[str, Any], context: ExecutionContext) -> dict[str, Any]:
         from dispatch_outbox import pregenerate_upcoming
+        outbox_id = str(payload.get("outbox_id") or "").strip() or None
         if context.dry_run:
             return {
                 "would_prepare_next": True,
+                "outbox_id": outbox_id,
                 "copy_provider": "gemini",
                 "visual_provider": "gemini",
                 "external_publication": False,
                 "production_mutated": False,
             }
-        result = pregenerate_upcoming(data_dir=context.data_dir)
+        result = pregenerate_upcoming(data_dir=context.data_dir, outbox_id=outbox_id)
         return {**result, "external_publication": False}
 
     def publication_correct_ready(payload: dict[str, Any], context: ExecutionContext) -> dict[str, Any]:
@@ -1708,7 +1710,7 @@ def register_core_capabilities(registry: CapabilityRegistry, policies: PolicyEng
         Capability("publication.reschedule", "Reschedule publication", "Atomically move one unclaimed publication package to a new date, time, and optional slot without changing its creative or history.", "SOCIAL", publication_reschedule, object_schema({"outbox_id": {"type": "string"}, "scheduled_at": {"type": "string"}, "slot": {"type": "string"}}, ["outbox_id", "scheduled_at"]), risk_level="INTERNAL_MUTATION", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=True, rollback_handler=rollback_publication_reschedule),
         Capability("publication.master_remake", "Conversational post remake", "Edit one READY post from an owner instruction with exactly gpt-5.6-sol, preserving the prior package as immutable version history and never silently substituting a model.", "SOCIAL", publication_master_remake, object_schema({"content_date": {"type": "string"}, "outbox_id": {"type": "string"}, "instruction": {"type": "string"}}, ["content_date", "outbox_id", "instruction"]), risk_level="INTERNAL_MUTATION", cost_class="MEDIUM", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=False),
         Capability("publication.edit_ready", "Edit ready publication", "Version and update only owner-editable copy or a registry-backed post type on one READY package; preserve media, routing, canon, and transaction evidence.", "SOCIAL", publication_edit_ready, object_schema({"content_date": {"type": "string"}, "outbox_id": {"type": "string"}, "changes": {"type": "object"}}, ["content_date", "outbox_id", "changes"]), risk_level="INTERNAL_MUTATION", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=False),
-        Capability("publication.prepare_next", "Prepare next publication", "Generate and validate strict Gemini copy and visuals for the next eligible READY package without publishing it.", "SOCIAL", publication_prepare_next, object_schema({}), risk_level="INTERNAL_MUTATION", cost_class="MEDIUM", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=False),
+        Capability("publication.prepare_next", "Prepare next publication", "Generate and validate strict Gemini copy and visuals for the next eligible READY package without publishing it; optionally target one exact owner-approved outbox package.", "SOCIAL", publication_prepare_next, object_schema({"outbox_id": {"type": "string"}}), risk_level="INTERNAL_MUTATION", cost_class="MEDIUM", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=False),
         Capability("publication.dispatch", "Dispatch due publications", "Dispatch due approved outbox packages through preserved idempotent platform publishers; optionally target one exact outbox for approved publish-now; preview safely with dry run.", "SOCIAL", publication_dispatch, object_schema({"outbox_id": {"type": "string"}, "publish_now": {"type": "boolean"}}), risk_level="EXTERNAL_IRREVERSIBLE", cost_class="MEDIUM", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=False),
         Capability("publication.delete", "Delete exact publication", "Delete one exact platform publication by immutable provider ID after owner approval.", "SOCIAL", publication_delete, object_schema({"platform": {"type": "string"}, "post_id": {"type": "string"}}, ["platform", "post_id"]), risk_level="EXTERNAL_IRREVERSIBLE", permission_requirement="EXECUTE_WITH_APPROVAL", supports_rollback=False),
         Capability("brand.positioning.get", "Get brand positioning", "Return owner-first identity, purpose, worldview, competitive position, and voice constraints with preserved source hierarchy.", "BRAND", brand_positioning),

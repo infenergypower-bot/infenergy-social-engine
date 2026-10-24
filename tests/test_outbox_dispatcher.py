@@ -562,6 +562,31 @@ def test_budget_blocked_pregeneration_skips_oversized_workflow(monkeypatch):
     assert result == {"status": "PREGENERATED", "outbox_id": "eligible"}
 
 
+def test_targeted_pregeneration_uses_exact_stale_package(monkeypatch):
+    package = {
+        "gemini_generation": {
+            "provider": "gemini", "strict_provider": True, "fallback_allowed": False,
+            "required_image_count": 1, "prompts": [{}],
+        },
+    }
+    monkeypatch.setattr(dispatch_outbox, "upcoming_ready_packages", Mock(side_effect=AssertionError("automatic query used")))
+    monkeypatch.setattr(dispatch_outbox, "ready_package_for_preparation", lambda *_: {
+        "outbox_id": "target", "scheduled_at": "2026-09-15T12:00:00+00:00",
+        "lifecycle_state": PackageState.BLOCKED_BUDGET.value, "package": package,
+    })
+    monkeypatch.setattr(dispatch_outbox, "preflight_gemini_workflow", lambda **_: {"allowed": True})
+    monkeypatch.setattr(dispatch_outbox, "transition_package", Mock())
+    monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", lambda prepared, _: prepared)
+    monkeypatch.setattr(dispatch_outbox, "update_ready_package", lambda *args: True)
+    monkeypatch.setattr(dispatch_outbox, "evaluate_outbox_readiness", lambda *_, **__: {
+        "ready": True, "state": PackageState.READY_TO_DISPATCH.value, "reason_codes": [],
+    })
+
+    result = dispatch_outbox.pregenerate_upcoming(data_dir="unused", outbox_id="target")
+
+    assert result == {"status": "PREGENERATED", "outbox_id": "target"}
+
+
 def test_daily_package_publishes_each_platform_at_its_own_growth_window(tmp_path):
     data_dir = str(tmp_path)
     outbox_id = _ready_package(data_dir, ["facebook", "instagram", "linkedin"])

@@ -33,6 +33,7 @@ from content_operations import (  # noqa: E402
     publishing_metrics,
     reconcile_ready_inventory,
     reconcile_stale_claims,
+    ready_package_for_preparation,
     reschedule_outbox,
     reserve_ai_attempt,
     today_schedule,
@@ -186,6 +187,10 @@ def test_budget_blocked_package_respects_stale_preparation_cutoff(tmp_path):
     )
 
     assert rows == []
+    target = ready_package_for_preparation(data_dir, outbox_id)
+    assert target is not None
+    assert target["outbox_id"] == outbox_id
+    assert target["lifecycle_state"] == PackageState.BLOCKED_BUDGET.value
 
 
 def test_initialization_migrates_legacy_ready_draft_to_preparation_required(tmp_path):

@@ -27,6 +27,7 @@ from content_operations import (
     platform_transaction,
     record_publication_history,
     reconcile_confirmed_transactions,
+    ready_package_for_preparation,
     recover_outbox,
     release_outbox,
     transition_package,
@@ -508,13 +509,17 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
     return package
 
 
-def pregenerate_upcoming(*, data_dir: str = DATA_DIR) -> dict[str, Any]:
+def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = None) -> dict[str, Any]:
     lead_minutes = load_runtime_config().preparation_lead_time_minutes
     now_utc = datetime.now(timezone.utc)
     before_utc = (now_utc + timedelta(minutes=lead_minutes)).isoformat()
     stale_grace_hours = max(0, int(os.environ.get("CONTENT_PREGENERATION_STALE_GRACE_HOURS", "6")))
     after_utc = (now_utc - timedelta(hours=stale_grace_hours)).isoformat()
-    rows = upcoming_ready_packages(data_dir, before_utc=before_utc, after_utc=after_utc, limit=100)
+    if outbox_id:
+        target = ready_package_for_preparation(data_dir, outbox_id)
+        rows = [target] if target else []
+    else:
+        rows = upcoming_ready_packages(data_dir, before_utc=before_utc, after_utc=after_utc, limit=100)
     news_before_utc = datetime.now(timezone.utc) + timedelta(hours=24)
     budget_blocked_result: dict[str, Any] | None = None
     for row in rows:
@@ -580,6 +585,8 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR) -> dict[str, Any]:
                 state, reason = PackageState.FAILED_PREPARATION.value, "PREPARATION_FAILED"
             transition_package(data_dir, outbox_id, state, reason, actor="dispatch_outbox.pregenerate", detail={"error": error})
             return {"status": state, "outbox_id": outbox_id, "reason_code": reason, "error": error}
+    if outbox_id and not rows:
+        return {"status": "NOT_ELIGIBLE", "outbox_id": outbox_id, "detail": "target_not_ready_for_preparation"}
     return budget_blocked_result or {"status": "IDLE", "detail": "no_upcoming_gemini_assets_needed"}
 
 
