@@ -532,13 +532,17 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR) -> dict[str, Any]:
         try:
             lifecycle_state = row.get("lifecycle_state")
             if lifecycle_state == PackageState.BLOCKED_BUDGET.value:
-                attempts_per_image = max(0, min(int(os.environ.get("GEMINI_IMAGE_REPAIR_ATTEMPTS", "0")), 5)) + 1
-                image_calls = required_count * attempts_per_image
+                image_calls = required_count
                 reasoning_calls = image_calls + (0 if _gemini_copy_ready(package) else 1)
                 try:
                     preflight_gemini_workflow(image_calls=image_calls, reasoning_calls=reasoning_calls)
-                except GeminiBudgetExceeded:
-                    continue
+                except GeminiBudgetExceeded as exc:
+                    return {
+                        "status": PackageState.BLOCKED_BUDGET.value,
+                        "outbox_id": outbox_id,
+                        "reason_code": "AI_BUDGET_EXHAUSTED",
+                        "error": str(exc),
+                    }
             if lifecycle_state in {PackageState.FAILED_PREPARATION.value, PackageState.BLOCKED_BUDGET.value}:
                 transition_package(
                     data_dir,

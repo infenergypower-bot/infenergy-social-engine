@@ -456,7 +456,7 @@ def test_pregeneration_persists_completed_copy_before_image_failure(tmp_path, mo
     assert persisted["gemini_copy"]["model_output_sha256"] == "copy-digest"
 
 
-def test_budget_blocked_pregeneration_waits_then_retries_when_full_workflow_fits(monkeypatch):
+def test_budget_blocked_pregeneration_retries_when_base_workflow_fits(monkeypatch):
     package = {
         "gemini_copy": {"provider": "gemini", "strict_provider": True, "fallback_allowed": False, "status": "PENDING"},
         "gemini_generation": {
@@ -509,7 +509,12 @@ def test_budget_blocked_pregeneration_does_not_retry_before_capacity_returns(mon
 
     result = dispatch_outbox.pregenerate_upcoming(data_dir="unused")
 
-    assert result == {"status": "IDLE", "detail": "no_upcoming_gemini_assets_needed"}
+    assert result == {
+        "status": "BLOCKED_BUDGET",
+        "outbox_id": "budget-1",
+        "reason_code": "AI_BUDGET_EXHAUSTED",
+        "error": "daily budget exhausted",
+    }
     assert transitions == []
     prepare_assets.assert_not_called()
 
