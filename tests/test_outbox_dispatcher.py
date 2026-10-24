@@ -519,6 +519,49 @@ def test_budget_blocked_pregeneration_does_not_retry_before_capacity_returns(mon
     prepare_assets.assert_not_called()
 
 
+def test_budget_blocked_pregeneration_skips_oversized_workflow(monkeypatch):
+    blocked = {
+        "gemini_generation": {
+            "provider": "gemini", "strict_provider": True, "fallback_allowed": False,
+            "required_image_count": 3, "prompts": [{}, {}, {}],
+        },
+    }
+    eligible = {
+        "gemini_generation": {
+            "provider": "gemini", "strict_provider": True, "fallback_allowed": False,
+            "required_image_count": 1, "prompts": [{}],
+        },
+    }
+    monkeypatch.setattr(dispatch_outbox, "upcoming_ready_packages", lambda *_, **__: [
+        {
+            "outbox_id": "oversized", "scheduled_at": "2026-09-15T12:00:00+00:00",
+            "lifecycle_state": PackageState.BLOCKED_BUDGET.value, "package": blocked,
+        },
+        {
+            "outbox_id": "eligible", "scheduled_at": "2026-09-16T12:00:00+00:00",
+            "lifecycle_state": PackageState.BLOCKED_BUDGET.value, "package": eligible,
+        },
+    ])
+    monkeypatch.setattr(
+        dispatch_outbox,
+        "preflight_gemini_workflow",
+        Mock(side_effect=[
+            dispatch_outbox.GeminiBudgetExceeded("three images do not fit"),
+            {"allowed": True},
+        ]),
+    )
+    monkeypatch.setattr(dispatch_outbox, "transition_package", Mock())
+    monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", lambda package, _: package)
+    monkeypatch.setattr(dispatch_outbox, "update_ready_package", lambda *args: True)
+    monkeypatch.setattr(dispatch_outbox, "evaluate_outbox_readiness", lambda *_, **__: {
+        "ready": True, "state": PackageState.READY_TO_DISPATCH.value, "reason_codes": [],
+    })
+
+    result = dispatch_outbox.pregenerate_upcoming(data_dir="unused")
+
+    assert result == {"status": "PREGENERATED", "outbox_id": "eligible"}
+
+
 def test_daily_package_publishes_each_platform_at_its_own_growth_window(tmp_path):
     data_dir = str(tmp_path)
     outbox_id = _ready_package(data_dir, ["facebook", "instagram", "linkedin"])

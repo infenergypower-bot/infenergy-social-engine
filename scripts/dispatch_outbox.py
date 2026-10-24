@@ -516,6 +516,7 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR) -> dict[str, Any]:
     after_utc = (now_utc - timedelta(hours=stale_grace_hours)).isoformat()
     rows = upcoming_ready_packages(data_dir, before_utc=before_utc, after_utc=after_utc, limit=100)
     news_before_utc = datetime.now(timezone.utc) + timedelta(hours=24)
+    budget_blocked_result: dict[str, Any] | None = None
     for row in rows:
         package = row["package"]
         if package.get("weekly_role") == "current_news":
@@ -537,12 +538,13 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR) -> dict[str, Any]:
                 try:
                     preflight_gemini_workflow(image_calls=image_calls, reasoning_calls=reasoning_calls)
                 except GeminiBudgetExceeded as exc:
-                    return {
+                    budget_blocked_result = {
                         "status": PackageState.BLOCKED_BUDGET.value,
                         "outbox_id": outbox_id,
                         "reason_code": "AI_BUDGET_EXHAUSTED",
                         "error": str(exc),
                     }
+                    continue
             if lifecycle_state in {PackageState.FAILED_PREPARATION.value, PackageState.BLOCKED_BUDGET.value}:
                 transition_package(
                     data_dir,
@@ -578,7 +580,7 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR) -> dict[str, Any]:
                 state, reason = PackageState.FAILED_PREPARATION.value, "PREPARATION_FAILED"
             transition_package(data_dir, outbox_id, state, reason, actor="dispatch_outbox.pregenerate", detail={"error": error})
             return {"status": state, "outbox_id": outbox_id, "reason_code": reason, "error": error}
-    return {"status": "IDLE", "detail": "no_upcoming_gemini_assets_needed"}
+    return budget_blocked_result or {"status": "IDLE", "detail": "no_upcoming_gemini_assets_needed"}
 
 
 def _creative_package_error(package: dict[str, Any], platforms: list[str]) -> str:
