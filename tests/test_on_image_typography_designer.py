@@ -52,6 +52,22 @@ def test_normalize_typography_uses_safe_brand_defaults():
     }
 
 
+def test_normalize_typography_uses_safe_zone_when_designer_zone_is_invalid():
+    result = _normalize_typography({
+        "zone": {"x": None},
+        "alignment": "left",
+        "color": "warm_white",
+        "weight": "bold",
+        "max_width_ratio": 0.5,
+        "canvas_height_ratio": 0.15,
+        "tracking": 0,
+        "line_break": "EXACT HEADLINE",
+        "decoration": "restrained amber accent rule",
+    }, "EXACT HEADLINE")
+
+    assert result["zone"] == {"x": 0.08, "y": 0.08, "width": 0.55, "height": 0.22}
+
+
 @pytest.mark.parametrize(
     "zone",
     [

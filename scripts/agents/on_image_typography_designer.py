@@ -39,7 +39,10 @@ def _normalize_zone(value: Any) -> dict[str, float]:
 
 
 def _normalize_typography(result: dict[str, Any], headline: str) -> dict[str, Any]:
-    result["zone"] = _normalize_zone(result.get("zone"))
+    try:
+        result["zone"] = _normalize_zone(result.get("zone"))
+    except RuntimeError:
+        result["zone"] = {"x": 0.08, "y": 0.08, "width": 0.55, "height": 0.22}
     if result.get("alignment") not in _ALLOWED_ALIGNMENTS:
         result["alignment"] = "left"
     if result.get("color") not in _ALLOWED_COLORS:
