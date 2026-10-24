@@ -1234,15 +1234,22 @@ def _generate_gemini_full_creative(
     ] if isinstance(v5_direction.get("gemini_rendered_text"), list) else []
     v5_text_forward = bool(gemini_rendered_text)
     if v5_text_forward:
-        prompt = (
-            "Create the text-free base photograph first. Render no words, letters, numbers, logos, captions, labels, or typography anywhere. "
-            "Preserve intentional open negative space that belongs naturally to the scene for a later typography pass. "
-            + prompt
+        typography_instruction = str(v5_direction.get("typography_render_instruction") or "").strip()
+        exact_text_instruction = (
+            "Render this exact text once as uniquely designed, scene-integrated typography inside the finished image: "
+            + json.dumps(gemini_rendered_text, ensure_ascii=True)
+            + ". Generate the photography and typography together in this single image request. "
+            "Do not leave blank space for a later overlay and do not add any other text."
         )
+        if not all(line in typography_instruction for line in gemini_rendered_text):
+            typography_instruction = f"{exact_text_instruction} {typography_instruction}".strip()
+        prompt = f"{prompt}\n\n{typography_instruction}"
     metadata["visual_prompt_hash"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     quality_profile = str(content.get("visual_quality_profile") or "")
     text_free_profile = quality_profile == "micro_mission_story"
-    expected_headline, _ = _headline_lockup(content) if not v5_text_forward and not text_free_profile else ("", "")
+    expected_headline = gemini_rendered_text[0] if v5_text_forward else (
+        _headline_lockup(content)[0] if not text_free_profile else ""
+    )
     expected_cta = normalize_brand_text(str(content.get("selected_cta") or "Learn more")) if not v5_text_forward and not text_free_profile else ""
     repo_context = _load_visual_repo_context()
     repo_refs = repo_context.get("references", []) if isinstance(repo_context, dict) else []
@@ -1310,8 +1317,6 @@ def _generate_gemini_full_creative(
             reasoning_calls=max_generation_attempts,
         )
         metadata["image_provider_call_count"] = 0
-        candidate_has_typography = not v5_text_forward
-        typography_prompt = ""
         try:
             config_kwargs: dict[str, Any] = {"response_modalities": ["TEXT", "IMAGE"]}
             try:
@@ -1345,33 +1350,6 @@ def _generate_gemini_full_creative(
                 if not accepted:
                     rejection_reason = f"plate_quality_rejected:{','.join(plate_reasons)}"
                 else:
-                    if v5_text_forward and not candidate_has_typography:
-                        from agents.on_image_typography_designer import design_receipt
-
-                        designer_receipt = design_receipt(
-                            data_dir or os.path.dirname(os.path.dirname(output_path)),
-                            raw,
-                            gemini_rendered_text[0],
-                            platform,
-                        )
-                        typography = designer_receipt["typography"]
-                        metadata["agent_orchestration"] = {
-                            "on_image_typography_designer": {
-                                "status": designer_receipt.get("status"),
-                                "snapshot_path": designer_receipt.get("snapshot_path"),
-                                "typography": typography,
-                            }
-                        }
-                        generated = _resize_cover(generated, spec["target"], image_module)
-                        generated, typography_error = _apply_designer_typography(generated, gemini_rendered_text[0], typography)
-                        if typography_error:
-                            reasons_by_model[model_name] = typography_error
-                            continue
-                        metadata["local_text_overlay_used"] = True
-                        rendered = io.BytesIO()
-                        generated.save(rendered, format="PNG", optimize=True)
-                        raw = rendered.getvalue()
-                        candidate_has_typography = True
                     root = _safe_json_dict(content.get("consumer_root"))
                     consumer_moment = _safe_json_dict(root.get("moment"))
                     accepted, semantic_reasons = _gemini_semantic_plate_quality(
@@ -1392,21 +1370,17 @@ def _generate_gemini_full_creative(
                         if generated.size != spec["target"]:
                             rejection_reason = "resize_mismatch"
                         else:
-                            generated, overlay_error = _apply_v5_text_overlay(generated, v5_direction)
-                            if overlay_error:
-                                rejection_reason = overlay_error
-                            else:
-                                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                                generated.save(output_path, format="PNG", optimize=True)
-                                metadata["semantic_quality_gate_version"] = 2
-                                return completed(True, "ok", model=model_name, retry_count=attempt)
+                            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                            generated.save(output_path, format="PNG", optimize=True)
+                            metadata["semantic_quality_gate_version"] = 2
+                            return completed(True, "ok", model=model_name, retry_count=attempt)
                 reasons_by_model[model_name] = rejection_reason
                 if attempt + 1 < max_generation_attempts:
                     repair_bytes, repair_mime = _normalize_reference_image(raw)
                     correction_prompt = (
                         "Revise the attached rejected candidate into a new finished image. Preserve the approved scene and "
                         f"product identity, but correct every QA failure: {rejection_reason}. Follow this complete original "
-                        f"contract exactly: {typography_prompt if candidate_has_typography else prompt}"
+                        f"contract exactly: {prompt}"
                     )
                     contents = [correction_prompt]
                     if repair_bytes:

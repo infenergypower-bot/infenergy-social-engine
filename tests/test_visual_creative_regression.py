@@ -374,7 +374,7 @@ def test_gemini_image_quota_failure_short_circuits_following_calls(tmp_path, mon
     assert "resource_exhausted" in second[1].lower()
 
 
-def test_gemini_text_render_uses_image_aware_typography_agent(tmp_path, monkeypatch):
+def test_gemini_renders_text_inside_original_image_prompt(tmp_path, monkeypatch):
     image_buffer = io.BytesIO()
     Image.new("RGB", (1080, 1080), "#d8e0e4").save(image_buffer, format="PNG")
     image_bytes = image_buffer.getvalue()
@@ -406,30 +406,6 @@ def test_gemini_text_render_uses_image_aware_typography_agent(tmp_path, monkeypa
     monkeypatch.setattr(social_visuals, "_load_visual_repo_context", lambda: {"references": [], "settings": {}})
     monkeypatch.setattr(social_visuals, "_gemini_plate_quality", lambda *_args: (True, []))
     monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args: (True, []))
-    designer_pixels = []
-
-    def design_receipt(_data_dir, pixels, headline, platform):
-        designer_pixels.append(pixels)
-        return {
-            "status": "COMPLETE",
-            "snapshot_path": "designer.json",
-            "typography": {
-                "zone": {"x": 0.08, "y": 0.1, "width": 0.42, "height": 0.2},
-                "anchor": "left architecture edge",
-                "alignment": "left",
-                "max_width_ratio": 0.42,
-                "canvas_height_ratio": 0.1,
-                "line_break": "BLUEPRINTS DO NOT WAIT.",
-                "color": "warm_white",
-                "weight": "bold",
-                "tracking": 0.01,
-                "decoration": "restrained amber accent rule",
-                "rationale": "Uses the open upper-left field.",
-                "protected_regions": ["person", "product", "cable"],
-            },
-        }
-
-    monkeypatch.setattr("agents.on_image_typography_designer.design_receipt", design_receipt)
     output_path = str(tmp_path / "two-pass.png")
     rendered, reason, metadata = social_visuals._generate_gemini_full_creative(
         {"post_id": "two-pass"},
@@ -448,12 +424,12 @@ def test_gemini_text_render_uses_image_aware_typography_agent(tmp_path, monkeypa
     assert rendered is True and reason == "ok"
     assert len(calls) == 1
     base_prompt = calls[0] if isinstance(calls[0], str) else calls[0][0]
-    assert "text-free base photograph" in base_prompt
-    assert "BLUEPRINTS DO NOT WAIT." not in base_prompt
-    assert designer_pixels == [image_bytes]
+    assert "text-free base photograph" not in base_prompt
+    assert "BLUEPRINTS DO NOT WAIT." in base_prompt
+    assert "Use no blue shadow, glow, outline, or text box." in base_prompt
     assert metadata["image_provider_call_count"] == 1
-    assert metadata["local_text_overlay_used"] is True
-    assert metadata["agent_orchestration"]["on_image_typography_designer"]["status"] == "COMPLETE"
+    assert metadata["local_text_overlay_used"] is False
+    assert "agent_orchestration" not in metadata
 
 
 def test_final_file_qa_preserves_packshot_only_rejection(tmp_path):
