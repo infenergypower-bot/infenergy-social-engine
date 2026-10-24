@@ -1148,6 +1148,21 @@ def claim_due(
         connection.execute("BEGIN IMMEDIATE")
         target_clause = "AND outbox_id=?" if outbox_id else ""
         due_clause = "" if force else "AND datetime(scheduled_at) <= datetime(?)"
+        owner_retry = bool(force and outbox_id)
+        status_clause = (
+            "status IN ('READY', 'DUE', 'EXTERNAL_ACTION_REQUIRED')"
+            if owner_retry
+            else """(
+                status IN ('READY', 'DUE')
+                OR (status='EXTERNAL_ACTION_REQUIRED' AND last_error='no_routed_platforms')
+                OR (status='RECOVERING' AND last_error='ready_package_has_no_routed_platforms')
+            )"""
+        )
+        lifecycle_clause = (
+            "lifecycle_state IN ('READY_TO_DISPATCH', 'PARTIALLY_PUBLISHED', 'FAILED_DELIVERY', 'RECONCILIATION_REQUIRED')"
+            if owner_retry
+            else "lifecycle_state IN ('READY_TO_DISPATCH', 'PARTIALLY_PUBLISHED', 'FAILED_DELIVERY')"
+        )
         parameters: list[Any] = []
         if not force:
             parameters.append(now)
@@ -1157,12 +1172,8 @@ def claim_due(
         row = connection.execute(
             f"""
             SELECT * FROM content_outbox
-                        WHERE (
-                            status IN ('READY', 'DUE')
-                            OR (status='EXTERNAL_ACTION_REQUIRED' AND last_error='no_routed_platforms')
-                            OR (status='RECOVERING' AND last_error='ready_package_has_no_routed_platforms')
-                        ) {due_clause}
-                            AND lifecycle_state IN ('READY_TO_DISPATCH', 'PARTIALLY_PUBLISHED', 'FAILED_DELIVERY')
+                        WHERE ({status_clause}) {due_clause}
+                            AND {lifecycle_clause}
                             AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime(?))
                             {target_clause}
             ORDER BY datetime(scheduled_at), created_at LIMIT 1
@@ -1175,14 +1186,10 @@ def claim_due(
         claimed_at = now
         attempt_id = uuid.uuid4().hex
         changed = connection.execute(
-            """
+            f"""
             UPDATE content_outbox SET status='CLAIMED', claimed_at=?, attempt_count=attempt_count+1,
                 lease_owner=?, lease_expires_at=?
-            WHERE outbox_id=? AND (
-                status IN ('READY', 'DUE')
-                OR (status='EXTERNAL_ACTION_REQUIRED' AND last_error='no_routed_platforms')
-                OR (status='RECOVERING' AND last_error='ready_package_has_no_routed_platforms')
-            )
+            WHERE outbox_id=? AND ({status_clause})
             """,
             (
                 claimed_at,

@@ -300,6 +300,45 @@ def test_claim_due_can_target_one_future_outbox_for_approved_publish_now(tmp_pat
     assert claimed["status"] == "CLAIMED"
 
 
+def test_approved_publish_now_can_retry_external_action_package(tmp_path):
+    data_dir = str(tmp_path)
+    day = "2026-08-20"
+    ensure_daily_slots(data_dir, day, _schedule(day), {"platforms": ["facebook", "linkedin"]})
+    decision_id = create_council_session(data_dir, content_date=day, slot="morning", blackboard={"content_job": "TEACH"})
+    target = mark_ready(
+        data_dir, content_date=day, slot="morning", scheduled_at=_schedule(day)["morning"],
+        decision_id=decision_id, package={
+            "content_id": "target",
+            "routing": {"platforms": ["facebook", "linkedin"]},
+            "platform_posts": {
+                "facebook": {"final_caption": "Ready copy"},
+                "linkedin": {"final_caption": "Ready copy"},
+            },
+            "primary_publish_image_url": "https://example.test/ready.png",
+        },
+    )
+    connection = sqlite3.connect(os.path.join(data_dir, "inventory.db"))
+    connection.execute(
+        """UPDATE content_outbox SET status='EXTERNAL_ACTION_REQUIRED',
+           lifecycle_state='RECONCILIATION_REQUIRED', last_error='linkedin:expired token'
+           WHERE outbox_id=?""",
+        (target,),
+    )
+    connection.commit()
+    connection.close()
+
+    assert claim_due(data_dir, "2026-08-20T13:00:01+00:00") is None
+    claimed = claim_due(
+        data_dir,
+        "2026-08-20T13:00:01+00:00",
+        outbox_id=target,
+        force=True,
+    )
+
+    assert claimed["outbox_id"] == target
+    assert claimed["status"] == "CLAIMED"
+
+
 def test_reschedule_outbox_moves_ready_package_and_daily_slot_atomically(tmp_path):
     data_dir = str(tmp_path)
     first_day = "2026-08-20"
