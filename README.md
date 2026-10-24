@@ -83,6 +83,11 @@ that the instance has enough memory for more simultaneous transfers. Lower it to
 memory-constrained instance. Autonomous generation and scheduled publishing remain enabled; the
 limit only queues excess HTTP requests.
 
+Use `GEMINI_DAILY_IMAGE_LIMIT=3` with `GEMINI_DAILY_CALL_LIMIT=12` for one daily post that may need
+typography and semantic QA. Keep `ENABLE_LINKEDIN=false` until its access token and organization or
+author URN are valid; disabled platforms are removed from outbox routing so available platforms can
+publish without generating recurring authorization failures.
+
 Generated media under `DATA_DIR/public_media` is durable publication state. Back up the attached
 volume before deleting files, and prune only assets that are no longer referenced by READY,
 CLAIMED, PUBLISHING, or externally published packages. For large long-term libraries, use object

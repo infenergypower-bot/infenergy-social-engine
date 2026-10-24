@@ -18,6 +18,7 @@ from content_operations import (  # noqa: E402
     complete_platform_transaction,
     complete_ai_attempt,
     classify_backlog,
+    configured_platforms,
     content_detail,
     content_operations_workspace,
     create_council_session,
@@ -47,6 +48,16 @@ def _schedule(day: str) -> dict[str, str]:
         "midday": f"{day}T17:00:00+00:00",
         "evening": f"{day}T23:00:00+00:00",
     }
+
+
+def test_configured_platforms_excludes_disabled_channels(monkeypatch):
+    monkeypatch.setenv("ENABLE_FACEBOOK", "true")
+    monkeypatch.setenv("ENABLE_INSTAGRAM", "true")
+    monkeypatch.setenv("ENABLE_LINKEDIN", "false")
+
+    assert configured_platforms({
+        "routing": {"platforms": ["facebook", "instagram", "linkedin"]},
+    }) == ["facebook", "instagram"]
 
 
 def test_daily_slots_outbox_and_archive_survive_restart(tmp_path):

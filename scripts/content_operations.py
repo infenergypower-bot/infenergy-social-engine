@@ -32,7 +32,12 @@ def configured_platforms(package: dict[str, Any]) -> list[str]:
     platform_policy = package.get("platform_policy") if isinstance(package.get("platform_policy"), dict) else {}
     if not configured and isinstance(platform_policy.get("platforms"), list):
         configured = platform_policy["platforms"]
-    return [platform for platform in PLATFORMS if platform in configured]
+    return [
+        platform
+        for platform in PLATFORMS
+        if platform in configured
+        and str(os.environ.get(f"ENABLE_{platform.upper()}", "true")).strip().lower() in {"1", "true", "yes", "on"}
+    ]
 
 
 def apply_growth_schedule_to_ready_inventory(data_dir: str, start_date: str | date | None = None) -> dict[str, int]:
