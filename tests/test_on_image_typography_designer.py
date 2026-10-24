@@ -17,6 +17,15 @@ def test_normalize_zone_trims_overflow_without_moving_origin():
     }
 
 
+def test_normalize_zone_accepts_numeric_json_strings():
+    assert _normalize_zone({"x": "0.08", "y": "0.1", "width": "0.42", "height": "0.2"}) == {
+        "x": 0.08,
+        "y": 0.1,
+        "width": 0.42,
+        "height": 0.2,
+    }
+
+
 @pytest.mark.parametrize(
     "zone",
     [

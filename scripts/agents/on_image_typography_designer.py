@@ -18,15 +18,17 @@ def _normalize_zone(value: Any) -> dict[str, float]:
     required = {"x", "y", "width", "height"}
     if not isinstance(value, dict) or not required.issubset(value):
         raise RuntimeError("typography_designer_zone_invalid")
-    zone = {key: value[key] for key in required}
-    if any(
-        isinstance(zone[key], bool)
-        or not isinstance(zone[key], (int, float))
-        or not 0 <= float(zone[key]) <= 1
-        for key in required
-    ):
+    try:
+        zone = {
+            key: float(value[key])
+            for key in required
+            if not isinstance(value[key], bool)
+        }
+    except (TypeError, ValueError):
         raise RuntimeError("typography_designer_zone_invalid")
-    normalized = {key: float(zone[key]) for key in required}
+    if set(zone) != required or any(not 0 <= zone[key] <= 1 for key in required):
+        raise RuntimeError("typography_designer_zone_invalid")
+    normalized = dict(zone)
     if normalized["width"] <= 0 or normalized["height"] <= 0:
         raise RuntimeError("typography_designer_zone_invalid")
     normalized["width"] = min(normalized["width"], 1 - normalized["x"])
