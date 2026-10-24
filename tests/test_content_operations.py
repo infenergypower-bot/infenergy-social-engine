@@ -149,7 +149,7 @@ def test_pregeneration_updates_only_unclaimed_ready_package(tmp_path):
     assert update_ready_package(data_dir, outbox_id, {"content_id": "overwritten"}) is False
 
 
-def test_budget_blocked_package_bypasses_stale_preparation_cutoff(tmp_path):
+def test_budget_blocked_package_respects_stale_preparation_cutoff(tmp_path):
     day = "2026-08-19"
     data_dir = str(tmp_path)
     ensure_daily_slots(data_dir, day, _schedule(day), {"mode": "owner_schedule"})
@@ -174,8 +174,7 @@ def test_budget_blocked_package_bypasses_stale_preparation_cutoff(tmp_path):
         after_utc="2026-08-19T20:00:00+00:00",
     )
 
-    assert [row["outbox_id"] for row in rows] == [outbox_id]
-    assert rows[0]["lifecycle_state"] == PackageState.BLOCKED_BUDGET.value
+    assert rows == []
 
 
 def test_initialization_migrates_legacy_ready_draft_to_preparation_required(tmp_path):
