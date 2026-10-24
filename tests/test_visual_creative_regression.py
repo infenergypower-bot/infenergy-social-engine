@@ -278,6 +278,56 @@ def test_local_character_reference_reaches_gemini(tmp_path, monkeypatch):
     assert any(isinstance(part, dict) and part.get("data") for part in calls[0][1:])
 
 
+def test_gemini_repairs_are_limited_by_remaining_budget(tmp_path, monkeypatch):
+    output_path = tmp_path / "budgeted.png"
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (1080, 1350), "#d8e0e4").save(image_buffer, format="PNG")
+    image_bytes = image_buffer.getvalue()
+    preflight_calls = []
+
+    class Models:
+        def generate_content(self, **_kwargs):
+            inline_data = types.SimpleNamespace(data=image_bytes)
+            part = types.SimpleNamespace(inline_data=inline_data)
+            return types.SimpleNamespace(candidates=[types.SimpleNamespace(content=types.SimpleNamespace(parts=[part]))])
+
+    fake_genai = types.ModuleType("google.genai")
+    fake_genai.Client = lambda **_kwargs: types.SimpleNamespace(models=Models())
+    fake_types = types.ModuleType("google.genai.types")
+    fake_types.GenerateContentConfig = lambda **kwargs: kwargs
+    fake_types.ImageConfig = lambda **kwargs: kwargs
+    fake_types.HttpOptions = lambda **kwargs: kwargs
+    fake_types.HttpRetryOptions = lambda **kwargs: kwargs
+    fake_types.Part = types.SimpleNamespace(from_bytes=lambda **kwargs: kwargs)
+    fake_genai.types = fake_types
+    monkeypatch.setattr(google, "genai", fake_genai)
+    monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_IMAGE_REPAIR_ATTEMPTS", "2")
+    monkeypatch.setattr(social_visuals, "_GEMINI_IMAGE_UNAVAILABLE_REASON", "")
+    monkeypatch.setattr(social_visuals, "_load_visual_repo_context", lambda: {"references": [], "settings": {}})
+    monkeypatch.setattr(social_visuals, "_gemini_plate_quality", lambda *_args: (True, []))
+    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args: (True, []))
+    monkeypatch.setattr(social_visuals, "budget_snapshot", lambda: {
+        "image": {"remaining": 1},
+        "total": {"remaining": 2},
+    })
+    monkeypatch.setattr(social_visuals, "preflight_gemini_workflow", lambda **kwargs: preflight_calls.append(kwargs))
+
+    rendered, reason, metadata = social_visuals._generate_gemini_full_creative(
+        {"post_id": "budgeted"},
+        "instagram",
+        {"v5_direction": {"format": "feed"}, "gemini_image_prompt": "Create one clean energy scene."},
+        str(output_path),
+    )
+
+    assert rendered is True
+    assert reason == "ok"
+    assert metadata["image_provider_call_count"] == 1
+    assert preflight_calls == [{"image_calls": 1, "reasoning_calls": 1}]
+
+
 def test_product_free_editorial_source_is_not_misclassified_as_packshot(tmp_path):
     artifact = tmp_path / "editorial.png"
     _image(artifact, social_visuals._platform_visual_spec("linkedin")["target"])

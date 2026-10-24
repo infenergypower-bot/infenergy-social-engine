@@ -13,7 +13,7 @@ from typing import Any
 
 import requests
 
-from social.gemini_budget import GeminiBudgetExceeded, preflight_gemini_workflow, tracked_gemini_call
+from social.gemini_budget import GeminiBudgetExceeded, budget_snapshot, preflight_gemini_workflow, tracked_gemini_call
 from url_safety import is_safe_http_url
 
 BASE_DIR = os.path.dirname(__file__)
@@ -1298,7 +1298,13 @@ def _generate_gemini_full_creative(
 
         contents: Any = [prompt, *reference_parts] if reference_parts else prompt
         repair_attempts = max(0, min(int(os.environ.get("GEMINI_IMAGE_REPAIR_ATTEMPTS", "0")), 5))
-        max_generation_attempts = repair_attempts + 1
+        requested_attempts = repair_attempts + 1
+        remaining = budget_snapshot()
+        available_attempts = min(
+            int(remaining["image"]["remaining"]),
+            int(remaining["total"]["remaining"]) // 2,
+        )
+        max_generation_attempts = max(1, min(requested_attempts, available_attempts))
         preflight_gemini_workflow(
             image_calls=max_generation_attempts,
             reasoning_calls=max_generation_attempts,
