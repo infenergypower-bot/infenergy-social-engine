@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from agents.on_image_typography_designer import _normalize_zone
+from agents.on_image_typography_designer import _normalize_typography, _normalize_zone
 
 
 def test_normalize_zone_trims_overflow_without_moving_origin():
@@ -23,6 +23,32 @@ def test_normalize_zone_accepts_numeric_json_strings():
         "y": 0.1,
         "width": 0.42,
         "height": 0.2,
+    }
+
+
+def test_normalize_typography_uses_safe_brand_defaults():
+    result = _normalize_typography({
+        "zone": {"x": 0.08, "y": 0.1, "width": 0.42, "height": 0.2},
+        "alignment": "diagonal",
+        "color": "electric_blue",
+        "weight": "light",
+        "max_width_ratio": 0.9,
+        "canvas_height_ratio": 0.05,
+        "tracking": 0.2,
+        "line_break": "Changed words",
+        "decoration": "No box or glow",
+    }, "EXACT HEADLINE")
+
+    assert result == {
+        "zone": {"x": 0.08, "y": 0.1, "width": 0.42, "height": 0.2},
+        "alignment": "left",
+        "color": "warm_white",
+        "weight": "bold",
+        "max_width_ratio": 0.75,
+        "canvas_height_ratio": 0.12,
+        "tracking": 0.04,
+        "line_break": "EXACT HEADLINE",
+        "decoration": "restrained amber accent rule",
     }
 
 

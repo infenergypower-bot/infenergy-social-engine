@@ -38,6 +38,31 @@ def _normalize_zone(value: Any) -> dict[str, float]:
     return normalized
 
 
+def _normalize_typography(result: dict[str, Any], headline: str) -> dict[str, Any]:
+    result["zone"] = _normalize_zone(result.get("zone"))
+    if result.get("alignment") not in _ALLOWED_ALIGNMENTS:
+        result["alignment"] = "left"
+    if result.get("color") not in _ALLOWED_COLORS:
+        result["color"] = "warm_white"
+    if result.get("weight") not in _ALLOWED_WEIGHTS:
+        result["weight"] = "bold"
+    try:
+        result["max_width_ratio"] = min(0.75, max(0.35, float(result["max_width_ratio"])))
+        result["canvas_height_ratio"] = min(0.18, max(0.12, float(result["canvas_height_ratio"])))
+        result["tracking"] = min(0.04, max(-0.01, float(result["tracking"])))
+    except (KeyError, TypeError, ValueError):
+        raise RuntimeError("typography_designer_scale_invalid")
+    if str(result.get("line_break") or "").replace("\n", " ").strip() != headline.strip():
+        result["line_break"] = headline.strip()
+    banned = ("box", "pill", "banner", "card", "outline", "glow", "blue shadow", "extrusion", "no decoration", "none")
+    if not str(result.get("decoration") or "").strip() or any(
+        token in str(result["decoration"]).lower()
+        for token in banned
+    ):
+        result["decoration"] = "restrained amber accent rule"
+    return result
+
+
 def design(image_bytes: bytes, headline: str, platform: str) -> dict[str, Any]:
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -82,17 +107,7 @@ def design(image_bytes: bytes, headline: str, platform: str) -> dict[str, Any]:
     missing = sorted(required - set(result))
     if missing:
         raise RuntimeError(f"typography_designer_schema_invalid:{','.join(missing)}")
-    result["zone"] = _normalize_zone(result.get("zone"))
-    if result["alignment"] not in _ALLOWED_ALIGNMENTS or result["color"] not in _ALLOWED_COLORS or result["weight"] not in _ALLOWED_WEIGHTS:
-        raise RuntimeError("typography_designer_style_invalid")
-    if not 0.35 <= float(result["max_width_ratio"]) <= 0.75 or not 0.12 <= float(result["canvas_height_ratio"]) <= 0.18 or not -0.01 <= float(result["tracking"]) <= 0.04:
-        raise RuntimeError("typography_designer_scale_invalid")
-    if str(result["line_break"]).replace("\n", " ").strip() != headline.strip():
-        raise RuntimeError("typography_designer_text_changed")
-    banned = ("box", "pill", "banner", "card", "outline", "glow", "blue shadow", "extrusion", "no decoration", "none")
-    if any(token in str(result["decoration"]).lower() for token in banned):
-        raise RuntimeError("typography_designer_decoration_rejected")
-    return result
+    return _normalize_typography(result, headline)
 
 
 def design_receipt(data_dir: str, image_bytes: bytes, headline: str, platform: str) -> dict[str, Any]:
