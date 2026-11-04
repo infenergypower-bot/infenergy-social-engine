@@ -280,8 +280,12 @@ def _strict_publish_artifact_error(package: dict[str, Any], platform: str) -> st
 
 def _gemini_copy_ready(package: dict[str, Any]) -> bool:
     copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
+    editorial_ready=False
+    if copy_plan.get('provider')=='editorial_bank':
+        from editorial_calendar import copy_digest
+        editorial_ready=(package.get('editorial_bank') or {}).get('reviewed_copy_sha256')==copy_digest(package) and (package.get('production_quality') or {}).get('plan',{}).get('status')=='PASS'
     return (
-        copy_plan.get("provider") == "gemini"
+        (copy_plan.get("provider") == "gemini" or editorial_ready)
         and copy_plan.get("strict_provider") is True
         and copy_plan.get("status") == "COMPLETE"
         and bool(copy_plan.get("model_output_sha256"))
@@ -302,6 +306,9 @@ def _hydrate_product_image_approval(package: dict[str, Any]) -> dict[str, Any]:
 
 def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> dict[str, Any]:
     copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
+    if copy_plan.get('provider')=='editorial_bank':
+        if _gemini_copy_ready(package):return package
+        raise RuntimeError('editorial_bank_requires_fresh_copy_review')
     if copy_plan.get("provider") != "gemini" or copy_plan.get("strict_provider") is not True or copy_plan.get("fallback_allowed") is not False:
         raise RuntimeError("strict_gemini_copy_contract_missing")
     if _gemini_copy_ready(package):

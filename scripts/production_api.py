@@ -9,6 +9,18 @@ def handle(method, path, payload, data_dir):
     stem="/api/os/production"
     route=path[len(stem):].strip('/').split('/')
     if method=="GET" and route==["state"]:return 200,store.snapshot()
+    if route==['editorial-calendar'] and method=='GET':
+        from editorial_calendar import snapshot
+        return 200,snapshot(data_dir)
+    if route==['editorial-calendar','stage'] and method=='POST':
+        from editorial_calendar import stage
+        return 200,stage(data_dir,payload)
+    if route==['editorial-calendar','schedule'] and method=='POST':
+        from editorial_calendar import schedule_pending_review
+        return 200,schedule_pending_review(data_dir)
+    if route==['editorial-calendar','reviews'] and method=='POST':
+        from editorial_calendar import apply_reviews
+        return 200,apply_reviews(data_dir,payload)
     if method=="POST" and route==["connections","verify"]:
         from production_connections import verify
         result=verify()

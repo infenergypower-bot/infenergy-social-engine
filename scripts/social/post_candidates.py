@@ -85,6 +85,7 @@ def replace(package, failure):
         old = result['gemini_copy']
         result['gemini_copy'] = {k:old[k] for k in ('provider','strict_provider','fallback_allowed','task') if k in old}
         result['gemini_copy']['status'] = 'PENDING'
+        if old.get('provider')=='editorial_bank':result['gemini_copy']['provider']='gemini'
     if 'gemini_generation' in result:
         old = result['gemini_generation']
         result['gemini_generation'] = {k:old[k] for k in ('provider','strict_provider','fallback_allowed','required_image_count','aspect_ratio') if k in old}
