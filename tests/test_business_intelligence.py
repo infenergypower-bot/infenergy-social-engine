@@ -614,9 +614,10 @@ def test_orchestrator_hydrates_from_bi_when_flag_on(bi_env, monkeypatch):
     api.rebuild_profile()
     monkeypatch.setenv("ENABLE_BUSINESS_INTELLIGENCE", "1")
 
-    # Reload orchestrator so its module-level _bi_enabled sees the flag
+    # Reload only the orchestrator under test. Purging every social module
+    # splits worker exception/class identities used elsewhere in the suite.
     for name in list(sys.modules):
-        if name.startswith("social."):
+        if name == "social.orchestrator":
             del sys.modules[name]
 
     from social import orchestrator as orch
@@ -743,7 +744,7 @@ def test_orchestrator_end_to_end_with_bi_active(bi_env, monkeypatch):
     monkeypatch.setenv("ENABLE_BUSINESS_INTELLIGENCE", "1")
 
     for name in list(sys.modules):
-        if name.startswith("social."):
+        if name == "social.orchestrator":
             del sys.modules[name]
 
     from social.orchestrator import SocialIntelligenceOrchestrator
@@ -763,7 +764,7 @@ def test_generate_posts_run_social_intelligence_with_bi(bi_env, monkeypatch):
     _seed_all(bi_env)
     monkeypatch.setenv("ENABLE_BUSINESS_INTELLIGENCE", "1")
     for name in list(sys.modules):
-        if name.startswith("social.") or name == "business_intelligence":
+        if name == "social.orchestrator" or name == "business_intelligence":
             del sys.modules[name]
     from generate_posts import run_social_intelligence
     posts = run_social_intelligence(count=1, platform="instagram_feed", record_memory=False)
