@@ -34,9 +34,12 @@ def snapshot(data_dir):
             if not planned:issues.append('NO_UPCOMING_POSTS')
             at_risk=[p for p in planned if p not in ready and datetime.fromisoformat(p['scheduled_at'])<=now+timedelta(hours=4)]
             if at_risk:issues.append('POST_NOT_READY_BEFORE_DEADLINE')
+            preparation_failures=[p for p in planned if p['lifecycle_state'] in {'FAILED_PREPARATION','QA_REJECTED','BLOCKED_CANON','BLOCKED_CONFIGURATION','BLOCKED_PROVIDER_POLICY'}]
+            if preparation_failures:issues.append('AUTOMATIC_POST_NEEDS_ATTENTION')
             return {'status':'NEEDS_ATTENTION' if issues else 'READY' if ready else 'PREPARING',
                 'issues':issues,'healthy':not issues,'automatic_preparation_enabled':preparation,
                 'scheduled_posts':len(planned),'ready_posts':len(ready),'posts_at_risk':len(at_risk),
+                'preparation_failures':len(preparation_failures),
                 'next_post':next_post,'failed_or_uncertain_jobs':failed,'stalled_jobs':stalled}
         return {'status':'NEEDS_ATTENTION' if issues else 'PAUSED_BUDGET' if paused else 'AWAITING_OWNER_REVIEW' if drafts and not deliveries else 'READY','issues':issues,'failed_or_uncertain_jobs':failed,'stalled_jobs':stalled,'budget_paused_jobs':paused,'drafts_awaiting_review':drafts,'approved_deliveries_overdue':overdue,'healthy':not issues}
     except sqlite3.Error:

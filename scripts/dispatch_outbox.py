@@ -252,6 +252,12 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
     receipt = package.get("consumer_receipt") if isinstance(package.get("consumer_receipt"), dict) else {}
     brief = {
         "brand": "Infenergy Power",
+        "caption_requirements": {
+            "minimum_complete_sentences": 2,
+            "minimum_distinct_words": 14,
+            "instruction": "Each caption must give a specific action the reader can take, using at least one of these plain action verbs in its base form.",
+            "action_verbs": sorted(ACTION_WORDS),
+        },
         "content_date": package.get("content_date"),
         "format": contract.get("format"),
         "audience": contract.get("audience_name") or thought.get("audience"),
