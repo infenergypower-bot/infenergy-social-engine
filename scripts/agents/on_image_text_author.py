@@ -26,6 +26,7 @@ def _normalize_headline(value: str) -> str:
 
 
 def author(brief: dict[str, Any]) -> dict[str, Any]:
+    from social.production_quality import enabled as quality_enabled
     prompt = (
         "Create the complete final public copy and exact on-image message for one Infenergy social post. "
         "Return one JSON object with exactly these keys: statement, expansion, action, image_scene, visible_text, platform_captions. "
@@ -52,6 +53,15 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
         "Never promise a full charge, all-evening runtime, or a specific battery percentage. Do not invent brand services, guides, or assistance programs absent from the brief. Use only the supported, conditional result.\n\n"
         f"FACTUAL BRIEF:\n{json.dumps(brief, ensure_ascii=True, sort_keys=True)}"
     )
+    if quality_enabled():
+        prompt=prompt.replace('Each of the three platform captions must include the exact standalone word Infenergy.',
+            'Use Infenergy naturally when it contributes meaning; do not force a brand mention into every caption.')
+        prompt=prompt.replace('image_scene must name a specific person, place, activity, power interruption, and visible product use that resolves the moment.',
+            'image_scene must name a specific person, place, action, and visible consequence. A product-free or non-outage scene is valid.')
+        prompt=prompt.replace("Start with the reason for the post: one specific problem, the product's useful action, and a visible outcome.",
+            'Start with the reason for the post: one specific human situation, a visible action, and a worthwhile payoff.')
+        prompt=prompt.replace('The product must be actively used by a person in a credible scene.',
+            'When a real product is specified, show its honest supported role; otherwise do not invent or insert one.')
     result = model_router.generate_json(
         "copy_editing",
         prompt,
@@ -95,7 +105,7 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
         for platform in ("facebook", "instagram", "linkedin")
         if "infenergy" not in re.sub(r"[^a-z0-9 ]+", " ", str(captions[platform]).lower()).split()
     ]
-    if missing_brand:
+    if missing_brand and not quality_enabled():
         raise RuntimeError(f"gemini_copy_infenergy_role_missing:{','.join(missing_brand)}")
     return result
 

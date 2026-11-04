@@ -71,6 +71,9 @@ def visual_stage(store, job, payload):
     Studio remains available in the advanced workspace. This path avoids its
     multi-candidate fanout and hidden repairs; every repair is an explicit job.
     """
+    from social.production_quality import enabled as quality_enabled,current as quality_current
+    if quality_enabled() and not quality_current(payload,store.data_dir,'plan'):
+        raise ValueError('review_creative_plan_before_paid_image_generation')
     if not payload["concept"]: raise ValueError("concept_required_before_visual_production")
     if payload["rules"]["typography"] == "controlled":
         raise ValueError("save_creative_edits_then_regenerate_text_inside_the_image")
@@ -181,10 +184,12 @@ def run_one(store, owner="worker"):
             if outcome["revision"]!=job["revision"]:raise ValueError("receipt_revision_mismatch")
             store.finish(job,updates=outcome.get("updates"),result=outcome.get("result"))
             return True
-        if job["stage"] in {"concept","caption"} or job["stage"].startswith("visual"):
+        if job["stage"] in {"concept","caption","quality_plan","quality"} or job["stage"].startswith("visual"):
             from social.gemini_budget import preflight_gemini_workflow, GeminiBudgetExceeded
             try:
-                preflight_gemini_workflow(image_calls=int(job["stage"].startswith("visual")),reasoning_calls=int(job["stage"] in {"concept","caption"}))
+                from social.production_quality import current as quality_current
+                review_calls=sum(not quality_current(payload,store.data_dir,s) for s in ('plan','release')) if job['stage']=='quality' else 1 if job['stage']=='quality_plan' else int(job['stage'] in {'concept','caption'})
+                preflight_gemini_workflow(image_calls=int(job["stage"].startswith("visual")),reasoning_calls=review_calls)
             except GeminiBudgetExceeded:
                 store.wait_for_budget(job)
                 return True
@@ -192,6 +197,12 @@ def run_one(store, owner="worker"):
         if job["stage"] in {"concept","caption"}: updates=text_stage(store,job,payload)
         elif job["stage"].split(':')[0]=="visual": updates=visual_stage(store,job,payload)
         elif job["stage"]=="schedule": result=schedule_stage(store,job,payload)
+        elif job['stage'] in {'quality_plan','quality'}:
+            from social.production_quality import review
+            review(payload,store.data_dir,'plan')
+            if job['stage']=='quality' and (payload.get('production_quality') or {}).get('plan',{}).get('status')=='PASS':
+                review(payload,store.data_dir,'release')
+            updates={'production_quality':payload.get('production_quality',{})}
         elif job["stage"]=="inspect":
             from production_typography import inspect_text
             from PIL import Image,ImageOps

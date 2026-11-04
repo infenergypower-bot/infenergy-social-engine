@@ -183,6 +183,7 @@ class Production:
             })
             if set(updates) - {"review"}:
                 payload["review"] = {}
+                payload.pop('production_quality',None)
             self.validate_payload(payload)
             c.execute("UPDATE production_packages SET revision=revision+1,payload=?,approval=NULL,state='DRAFT',updated_at=? WHERE id=?", (json.dumps(payload), now(), identifier))
             c.execute("INSERT INTO production_revisions VALUES(?,?,?,?,?)", (identifier, int(revision)+1, json.dumps(payload), actor, now()))
@@ -257,6 +258,8 @@ class Production:
     def checks(self, identifier):
         item = self.get(identifier); p = item["payload"]; errors = []; warnings = []
         if item['state'] == 'SCRAPPED': errors.append('scrapped_package_cannot_publish')
+        from social.production_quality import enabled as quality_enabled,ready as quality_ready
+        if quality_enabled() and not quality_ready(p,self.data_dir):errors.append('production_quality_review_required_or_stale')
         concept = p["concept"]
         for key in ["human_moment", "hook", "payoff", "visual_direction", "brain_movement", "heart_response"]:
             if not str(concept.get(key, "")).strip(): errors.append("concept_"+key+"_missing")
@@ -340,7 +343,7 @@ class Production:
         import re
         if stage == "typography":
             raise ValueError("text_must_be_generated_inside_the_image_regenerate_the_frame")
-        if stage not in {"draft", "concept", "caption", "visual", "typography", "inspect", "schedule"} and not re.fullmatch(r"visual:[0-9]",stage): raise ValueError("unknown_production_stage")
+        if stage not in {"draft", "concept", "caption", "visual", "typography", "inspect", "quality_plan", "quality", "schedule"} and not re.fullmatch(r"visual:[0-9]",stage): raise ValueError("unknown_production_stage")
         with self.db() as c:
             c.execute("BEGIN IMMEDIATE")
             row = c.execute("SELECT * FROM production_packages WHERE id=?", (identifier,)).fetchone()
@@ -354,6 +357,8 @@ class Production:
             if stage=="draft":
                 if p["assets"]:raise ValueError("full_draft_requires_empty_assets_use_frame_repairs_to_preserve_existing_work")
                 remaining=["caption"]+["visual"]*p["rules"]["cards"]+["inspect"]
+                from social.production_quality import enabled as quality_enabled
+                if quality_enabled():remaining=['caption','quality_plan']+['visual']*p['rules']['cards']+['inspect','quality']
                 stage="concept"
             if c.execute("SELECT 1 FROM production_jobs WHERE package_id=? AND state IN ('QUEUED','RUNNING','RETRY','WAITING_BUDGET')", (identifier,)).fetchone(): raise Conflict("job_already_pending")
             if stage == "schedule":
@@ -425,6 +430,7 @@ class Production:
                 c.execute("UPDATE production_packages SET state='SCHEDULED',outbox_id=?,updated_at=? WHERE id=?", (result["outbox_id"], now(), row["id"]))
             c.execute("UPDATE production_jobs SET state=?,result=?,error=?,owner=NULL,lease_until=NULL,available_at=? WHERE id=?", (state, json.dumps(result or {}), error, (datetime.now(timezone.utc)+timedelta(seconds=60*owned["attempts"])).isoformat(), job["id"]))
             remaining=json.loads(owned["next_stages"])
+            if (updates or {}).get('production_quality',{}).get('plan',{}).get('status')=='BLOCKED':remaining=[]
             if state=="SUCCEEDED" and remaining:
                 next_revision=row["revision"]+int(bool(updates))
                 next_id=uuid.uuid4().hex
@@ -454,19 +460,23 @@ class Production:
             examples = [dict(r) for r in c.execute("SELECT * FROM production_examples ORDER BY created_at DESC LIMIT 50")]
             deliveries={r["outbox_id"]:{"state":r["lifecycle_state"],"status":r["status"],"readiness":json.loads(r["readiness_json"] or "{}")} for r in c.execute("SELECT outbox_id,lifecycle_state,status,readiness_json FROM content_outbox WHERE outbox_id IN (SELECT outbox_id FROM production_packages WHERE outbox_id IS NOT NULL)")}
         packages=[self.get(i) for i in ids]
-        for item in packages:item["delivery"]=deliveries.get(item["outbox_id"])
+        for item in packages:
+            item["delivery"]=deliveries.get(item["outbox_id"])
+            from social.production_quality import matches as quality_matches
+            item['quality_fresh']={s:quality_matches(item['payload'],self.data_dir,s) for s in ('plan','release')} if item['payload'].get('production_quality') else {}
         for r in observations:
             m = json.loads(r.pop("metrics")); reach = m.get("reach")
             r["metrics"] = m; r["rates"] = {key+"_per_reach": m[key]/reach if reach and key in m else None for key in ["shares","saves","follows","comments"]}
         from content_operations import classify_backlog, publishing_metrics
         from posting_schedule import inventory_snapshot
+        from social.production_quality import dashboard as quality_dashboard
         from production_health import snapshot as health_snapshot
         connection_checks={}
         for event in events:
             if event["event"]=="CONNECTION_CHECK":
                 detail=json.loads(event["detail"])
                 connection_checks.setdefault(detail["provider"],{**detail,"checked_at":event["created_at"],"verified":detail["status"]=="PASS"})
-        backup_path=Path(self.data_dir)/"backups/before-production-desk-v1.json"
+        backup_path=next((Path(self.data_dir)/'backups'/name for name in ['before-production-quality-v1.json','before-posting-schedule-v1.json','before-production-desk-v1.json'] if (Path(self.data_dir)/'backups'/name).is_file()),Path(self.data_dir)/'backups/before-production-desk-v1.json')
         runtime={"approval_mode":os.environ.get("EDITORIAL_APPROVAL_MODE","required"),"deployment_id":os.environ.get("RAILWAY_DEPLOYMENT_ID"),"commit":os.environ.get("BUILD_GIT_SHA") or os.environ.get("RAILWAY_GIT_COMMIT_SHA"),"backup":json.loads(backup_path.read_text()) if backup_path.is_file() else None}
 
         return {"packages": packages, "jobs": jobs, "events": events,
@@ -475,6 +485,7 @@ class Production:
                 "backlog": {k:len(v) for k,v in classify_backlog(self.data_dir).items()},
                 "runtime":runtime,"connection_checks":connection_checks,"operations_health":health_snapshot(self.data_dir),
                 "scheduled_inventory":inventory_snapshot(self.data_dir),
+                "quality":quality_dashboard(self.data_dir),
                 "dispatch_enabled":os.environ.get("CONTENT_DISPATCH_ENABLED","false").lower() in {"1","true","yes","on"},
                 "connections": {p: {"configured": bool(os.environ.get(k)), "verified": False} for p,k in [("gemini","GEMINI_API_KEY"),("meta","META_PAGE_ACCESS_TOKEN"),("studio","ENTERTAINMENT_STUDIO_TOKEN")]}}
 
@@ -528,7 +539,8 @@ class Production:
 
     def estimate(self, identifier, rates=None):
         p=self.get(identifier)["payload"]; rates=rates or {}
-        repairs=int(rates.get("repair_images",1)); text_calls=int(rates.get("text_calls",2))
+        from social.production_quality import enabled as quality_enabled
+        repairs=int(rates.get("repair_images",1)); text_calls=int(rates.get("text_calls",4 if quality_enabled() else 2))
         if not 0<=repairs<=10 or not 0<=text_calls<=20:raise ValueError("estimate_count_out_of_range")
         images=max(0,p["rules"]["cards"]-len(p["assets"]))+repairs
         known=all(rates.get(k) is not None for k in ["image_usd","text_call_usd"])

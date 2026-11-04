@@ -34,6 +34,15 @@ def _semantic_response(**overrides):
     return json.dumps({**{key: False for key in keys}, **overrides})
 
 
+def test_semantic_review_does_not_force_a_product_into_a_product_free_story():
+    from types import SimpleNamespace
+    response=SimpleNamespace(text=_semantic_response(product_missing=True))
+    client=SimpleNamespace(models=SimpleNamespace(generate_content=lambda **_:response))
+    types=SimpleNamespace(Part=SimpleNamespace(from_bytes=lambda **_:object()),GenerateContentConfig=lambda **_:None)
+    accepted,reasons=social_visuals._gemini_semantic_plate_quality(client,types,b'image','instagram',expected_headline='Check on your neighbors.',product_required=False)
+    assert accepted and reasons==[]
+
+
 def test_semantic_plate_review_allows_text_free_base_before_overlay():
     class Response:
         text = _semantic_response(text_missing_or_illegible=True, headline_mismatch=True, cta_missing=True)

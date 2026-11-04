@@ -26,11 +26,13 @@ def assert_not_scrapped(content: dict, data_dir: str | None = None) -> None:
                 raise ValueError('scrapped_content_cannot_publish')
 
 
-def authorize_automatic(content: dict, platform: str) -> None:
+def authorize_automatic(content: dict, platform: str, data_dir: str | None = None) -> None:
     """Opt-in automation accepts only finished, current, quality-reviewed inventory."""
     from datetime import datetime, timezone
     from dispatch_outbox import _gemini_assets_ready, _gemini_copy_ready
     from publication_contract import evaluate_publication_readiness
+    from social.production_quality import require
+    require(content,data_dir or os.environ.get('DATA_DIR',str(Path(__file__).resolve().parents[1]/'data')))
     generation = content.get('gemini_generation') or {}
     if not (content.get('gemini_copy') or {}).get('strict_provider') or not generation.get('strict_provider'):
         raise ValueError('automatic_publication_requires_strict_quality_pipeline')
@@ -45,7 +47,7 @@ def authorize_automatic(content: dict, platform: str) -> None:
 def authorize(content: dict, platform: str, *, data_dir: str | None = None) -> None:
     assert_not_scrapped(content, data_dir)
     if os.environ.get('EDITORIAL_APPROVAL_MODE', 'required') == 'automatic' and not content.get('production_approval'):
-        authorize_automatic(content, platform)
+        authorize_automatic(content, platform, data_dir)
         return
     # Explicit migration switch for an existing autonomous installation. New
     # installations require revision-bound approval by default.

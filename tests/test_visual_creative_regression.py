@@ -261,7 +261,7 @@ def test_local_character_reference_reaches_gemini(tmp_path, monkeypatch):
     monkeypatch.setattr(social_visuals, "_GEMINI_IMAGE_UNAVAILABLE_REASON", "")
     monkeypatch.setattr(social_visuals, "_load_visual_repo_context", lambda: {"references": [], "settings": {}})
     monkeypatch.setattr(social_visuals, "_gemini_plate_quality", lambda *_args: (True, []))
-    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args: (True, []))
+    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args, **_kwargs: (True, []))
     monkeypatch.setattr(social_visuals, "preflight_gemini_workflow", lambda **kwargs: preflight_calls.append(kwargs))
 
     rendered, reason, metadata = social_visuals._generate_gemini_full_creative(
@@ -308,7 +308,7 @@ def test_gemini_repairs_are_limited_by_remaining_budget(tmp_path, monkeypatch):
     monkeypatch.setattr(social_visuals, "_GEMINI_IMAGE_UNAVAILABLE_REASON", "")
     monkeypatch.setattr(social_visuals, "_load_visual_repo_context", lambda: {"references": [], "settings": {}})
     monkeypatch.setattr(social_visuals, "_gemini_plate_quality", lambda *_args: (True, []))
-    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args: (True, []))
+    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args, **_kwargs: (True, []))
     monkeypatch.setattr(social_visuals, "budget_snapshot", lambda: {
         "image": {"remaining": 1},
         "total": {"remaining": 2},
@@ -405,7 +405,7 @@ def test_gemini_renders_text_inside_original_image_prompt(tmp_path, monkeypatch)
     monkeypatch.setattr(social_visuals, "_GEMINI_IMAGE_UNAVAILABLE_REASON", "")
     monkeypatch.setattr(social_visuals, "_load_visual_repo_context", lambda: {"references": [], "settings": {}})
     monkeypatch.setattr(social_visuals, "_gemini_plate_quality", lambda *_args: (True, []))
-    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args: (True, []))
+    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args, **_kwargs: (True, []))
     output_path = str(tmp_path / "two-pass.png")
     rendered, reason, metadata = social_visuals._generate_gemini_full_creative(
         {"post_id": "two-pass"},

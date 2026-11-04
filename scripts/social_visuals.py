@@ -548,6 +548,7 @@ def _gemini_semantic_plate_quality(
     expected_text_lines: list[str] | None = None,
     quality_profile: str = "",
     visual_story: dict[str, Any] | None = None,
+    product_required: bool = True,
 ) -> tuple[bool, list[str]]:
     enabled = str(os.environ.get("GEMINI_VISUAL_QA_ENABLED", "true")).strip().lower() not in {"0", "false", "no"}
     if not enabled:
@@ -580,7 +581,8 @@ def _gemini_semantic_plate_quality(
         "of that action. Infenergy must not merely advise, point, pose, or hold equipment. He must appear exactly once and his face, "
         "suit, build, colors, cape, and physically attached chest emblem must match the supplied character reference. "
         if is_micro_mission
-        else f"It must contain a real product staged in the {spec['product_zone']}. "
+        else f"It must contain the verified product staged in the {spec['product_zone']}. " if product_required
+        else 'This is a product-free story. Do not require hardware or invent a product. Judge the human action and visible payoff. '
     )
     review_prompt = (
         "Review this finished Infenergy visual. " + text_requirements + subject_requirements + "Return JSON only with booleans for: "
@@ -657,7 +659,7 @@ def _gemini_semantic_plate_quality(
                     *failure_keys,
                 )
             else:
-                failure_keys = ("product_missing", "looks_like_generic_ai_poster", *failure_keys)
+                failure_keys = (("product_missing",) if product_required else ()) + ("looks_like_generic_ai_poster", *failure_keys)
             if visual_story:
                 failure_keys = ("visual_purpose_unclear", "product_role_unclear", "text_scene_mismatch", *failure_keys)
             if exact_lines:
@@ -1372,6 +1374,7 @@ def _generate_gemini_full_creative(
                         gemini_rendered_text or content.get("expected_text_lines"),
                         str(content.get("visual_quality_profile") or ""),
                         **({"visual_story": v5_direction["visual_story"]} if v5_direction.get("visual_story") else {}),
+                        product_required=bool(content.get('product_id')),
                     )
                     if not accepted:
                         rejection_reason = f"semantic_quality_rejected:{','.join(semantic_reasons)}"

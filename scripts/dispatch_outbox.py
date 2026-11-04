@@ -56,6 +56,7 @@ ACTION_WORDS = {
 
 
 def _copy_clarity_issues(result: dict[str, Any]) -> list[str]:
+    from social.production_quality import enabled as quality_enabled
     captions = result.get("platform_captions") if isinstance(result.get("platform_captions"), dict) else {}
     issues: list[str] = []
     for platform in PLATFORMS:
@@ -64,6 +65,9 @@ def _copy_clarity_issues(result: dict[str, Any]) -> list[str]:
         words = set(normalized.split())
         if any(phrase in normalized for phrase in AMBIGUOUS_COPY_PHRASES):
             issues.append(f"{platform}_ambiguous_language")
+        if quality_enabled():
+            if not caption:issues.append(f'{platform}_caption_missing')
+            continue  # The independent editor evaluates purpose, natural wording, and usefulness.
         if "infenergy" not in words:
             issues.append(f"{platform}_infenergy_role_missing")
         if not words.intersection(ACTION_WORDS):
@@ -480,6 +484,7 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
 
 
 def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = None) -> dict[str, Any]:
+    from social import production_quality as quality
     targeted = bool(outbox_id)
     lead_minutes = load_runtime_config().preparation_lead_time_minutes
     now_utc = datetime.now(timezone.utc)
@@ -510,14 +515,16 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
         generation = package.get("gemini_generation") if isinstance(package.get("gemini_generation"), dict) else {}
         required_count = int(generation.get("required_image_count") or 0)
         copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
-        if generation.get("strict_provider") is not True or (_gemini_copy_ready(package) and _gemini_assets_ready(package, required_count)):
+        images_ready=_gemini_copy_ready(package) and _gemini_assets_ready(package,required_count)
+        if generation.get("strict_provider") is not True or (images_ready and (not quality.enabled() or quality.ready(package,data_dir))):
             continue
         outbox_id = str(row["outbox_id"])
         try:
             lifecycle_state = row.get("lifecycle_state")
+            image_calls=0 if images_ready else required_count
+            quality_calls=sum(not quality.current(package,data_dir,s) for s in ('plan','release')) if quality.enabled() else 0
             if lifecycle_state == PackageState.BLOCKED_BUDGET.value:
-                image_calls = required_count
-                reasoning_calls = image_calls + (0 if _gemini_copy_ready(package) else 1)
+                reasoning_calls = image_calls + (0 if _gemini_copy_ready(package) else 1) + quality_calls
                 try:
                     preflight_gemini_workflow(image_calls=image_calls, reasoning_calls=reasoning_calls)
                 except GeminiBudgetExceeded as exc:
@@ -536,10 +543,12 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
                     "BUDGET_CAPACITY_RESTORED" if lifecycle_state == PackageState.BLOCKED_BUDGET.value else "PREPARATION_RETRY_SCHEDULED",
                     actor="dispatch_outbox.pregenerate",
                 )
+            elif lifecycle_state==PackageState.READY_TO_DISPATCH.value:
+                transition_package(data_dir,outbox_id,PackageState.PREPARATION_REQUIRED.value,'PRODUCTION_QUALITY_REVIEW_REQUIRED',actor='dispatch_outbox.pregenerate')
             transition_package(data_dir, outbox_id, PackageState.PREPARING.value, "PREPARATION_WINDOW_OPEN", actor="dispatch_outbox.pregenerate")
             if os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic':
-                preflight_gemini_workflow(image_calls=required_count,
-                    reasoning_calls=required_count + (0 if _gemini_copy_ready(package) else 1))
+                preflight_gemini_workflow(image_calls=image_calls,
+                    reasoning_calls=image_calls + (0 if _gemini_copy_ready(package) else 1) + quality_calls)
             existing_approval = package.get("product_image_approval")
             package = _hydrate_product_image_approval(package)
             if package.get("product_image_approval") != existing_approval and not update_ready_package(data_dir, outbox_id, package):
@@ -549,9 +558,17 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
                 package = _prepare_gemini_copy(package, data_dir)
                 if not copy_was_ready and not update_ready_package(data_dir, outbox_id, package):
                     return {"status": "DEFERRED", "outbox_id": outbox_id, "detail": "package_no_longer_ready"}
+            if quality.enabled():
+                reviewed=quality.review(package,data_dir,'plan')
+                if not update_ready_package(data_dir,outbox_id,package):return {'status':'DEFERRED','outbox_id':outbox_id}
+                if reviewed['status']!='PASS':raise RuntimeError('production_quality_plan_blocked')
             prepared = _prepare_gemini_assets(package, data_dir)
             if not update_ready_package(data_dir, outbox_id, prepared):
                 return {"status": "DEFERRED", "outbox_id": outbox_id, "detail": "package_no_longer_ready"}
+            if quality.enabled():
+                reviewed=quality.review(prepared,data_dir,'release')
+                if not update_ready_package(data_dir,outbox_id,prepared):return {'status':'DEFERRED','outbox_id':outbox_id}
+                if reviewed['status']!='PASS':raise RuntimeError('production_quality_release_blocked')
             transition_package(data_dir, outbox_id, PackageState.AWAITING_QA.value, "CREATIVE_GENERATED", actor="dispatch_outbox.pregenerate")
             readiness = evaluate_outbox_readiness(data_dir, outbox_id, dispatch_enabled=True, actor="dispatch_outbox.pregenerate")
             transition_package(data_dir, outbox_id, readiness["state"], "READINESS_PASSED" if readiness["ready"] else readiness["reason_codes"][0], actor="dispatch_outbox.pregenerate", detail=readiness)
