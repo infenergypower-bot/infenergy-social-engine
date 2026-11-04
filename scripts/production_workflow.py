@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from production_policy import FAMILIES, caption_review, digest, resolve
+from production_policy import FAMILIES, caption_review, digest, resolve, visual_message_digest
 
 
 def now() -> str:
@@ -169,6 +169,16 @@ class Production:
                 raise Conflict("production_in_progress")
             payload = json.loads(row["payload"])
             payload.update(updates)
+            # Refresh a draft's rules through a revision, preserving the old revision and approval history.
+            prior_rules = payload["rules"]
+            if prior_rules["typography"] == "controlled":
+                payload["concept"] = {key: value for key, value in payload["concept"].items() if key not in {
+                    "text_layers", "protected_regions", "protected_regions_by_frame",
+                }}
+            payload["rules"] = resolve(prior_rules["format_id"], objective=prior_rules["objective"], overrides={
+                "tone": prior_rules["tone"], "natural_response": prior_rules["natural_response"],
+                "typography": "integrated" if prior_rules["typography"] == "controlled" else prior_rules["typography"],
+            })
             if set(updates) - {"review"}:
                 payload["review"] = {}
             self.validate_payload(payload)
@@ -194,7 +204,7 @@ class Production:
             width, height = im.size
             image_format=im.format
         import hashlib
-        return {"path": str(p.relative_to(self.data_dir)), "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "width": width, "height": height,"format":image_format}
+        return {"path": p.relative_to(self.data_dir).as_posix(), "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "width": width, "height": height,"format":image_format}
 
     def delivery_asset(self, relative_path):
         import shutil
@@ -249,11 +259,19 @@ class Production:
             limit = {"instagram":2200,"linkedin":3000,"facebook":5000}[platform]
             if len(p["captions"].get(platform,"")) > limit: errors.append(platform+":caption_exceeds_platform_limit")
         if len(p["assets"]) != p["rules"]["cards"]: errors.append("finished_assets_required_for_each_frame")
-        for asset in p["assets"]:
+        for index, asset in enumerate(p["assets"]):
             try:
                 actual = self.asset_record(asset["path"])
                 if self.local_asset(asset["path"]).parent!=Path(self.data_dir)/"public_media":errors.append("finished_asset_must_be_in_public_media")
                 if actual["sha256"] != asset["sha256"]: errors.append("asset_file_changed")
+                if p["rules"]["typography"] != "controlled":
+                    if (asset.get("typography") or {}).get("mode") == "controlled":
+                        errors.append("regenerate_frame_with_text_inside_the_image")
+                    if asset.get("provider") == "gemini" and (
+                        asset.get("image_message_version") != 1
+                        or asset.get("message_sha256") != visual_message_digest(p, index)
+                    ):
+                        errors.append("image_message_changed_regenerate_the_frame")
                 if min(actual["width"], actual["height"]) < 720: errors.append("asset_resolution_too_low")
                 if "instagram" in p["platforms"] and (actual["format"]!="JPEG" or Path(actual["path"]).suffix.lower() not in {".jpg",".jpeg"}):errors.append("instagram_delivery_requires_jpeg_inspect_final_assets")
                 ratio=actual["width"]/actual["height"]
@@ -300,6 +318,8 @@ class Production:
 
     def queue(self, identifier, stage, revision):
         import re
+        if stage == "typography":
+            raise ValueError("text_must_be_generated_inside_the_image_regenerate_the_frame")
         if stage not in {"draft", "concept", "caption", "visual", "typography", "inspect", "schedule"} and not re.fullmatch(r"visual:[0-9]",stage): raise ValueError("unknown_production_stage")
         with self.db() as c:
             c.execute("BEGIN IMMEDIATE")
@@ -307,10 +327,12 @@ class Production:
             if not row or row["revision"] != int(revision): raise Conflict("revision_conflict_reload_package")
             if row["outbox_id"]: raise Conflict("already_scheduled")
             p = json.loads(row["payload"])
+            if p["rules"]["typography"] == "controlled" and stage not in {"inspect", "schedule"}:
+                raise ValueError("save_creative_edits_then_regenerate_text_inside_the_image")
             remaining=[]
             if stage=="draft":
                 if p["assets"]:raise ValueError("full_draft_requires_empty_assets_use_frame_repairs_to_preserve_existing_work")
-                remaining=["caption"]+["visual"]*p["rules"]["cards"]+(["typography"] if p["rules"]["typography"]=="controlled" else [])+["inspect"]
+                remaining=["caption"]+["visual"]*p["rules"]["cards"]+["inspect"]
                 stage="concept"
             if c.execute("SELECT 1 FROM production_jobs WHERE package_id=? AND state IN ('QUEUED','RUNNING','RETRY','WAITING_BUDGET')", (identifier,)).fetchone(): raise Conflict("job_already_pending")
             if stage == "schedule":
@@ -441,7 +463,9 @@ class Production:
 
     def clone(self, identifier):
         original=self.get(identifier)["payload"]
-        draft=self.create({"brief":original["brief"],"title":original["title"]+" (new draft)","format":original["rules"]["format_id"],"objective":original["rules"]["objective"],"platforms":original["platforms"],"overrides":{k:original["rules"][k] for k in ["tone","typography","natural_response"]}})
+        overrides={k:original["rules"][k] for k in ["tone","typography","natural_response"]}
+        if overrides["typography"] == "controlled": overrides["typography"] = "integrated"
+        draft=self.create({"brief":original["brief"],"title":original["title"]+" (new draft)","format":original["rules"]["format_id"],"objective":original["rules"]["objective"],"platforms":original["platforms"],"overrides":overrides})
         updates={k:v for k,v in original.items() if k not in {"rules","scheduled_at","review","provenance","title"}}
         return self.revise(draft["id"],updates,draft["revision"])
 

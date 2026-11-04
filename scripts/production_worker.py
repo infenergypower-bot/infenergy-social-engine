@@ -8,13 +8,15 @@ import os
 import time
 from pathlib import Path
 
-from production_policy import context, digest
+from production_policy import context, digest, visual_message_digest
 from production_workflow import Production, now
 
 
 def text_stage(store, job, payload):
     from social import model_router
     rules=payload["rules"]
+    if rules["typography"] == "controlled":
+        raise ValueError("save_creative_edits_then_regenerate_text_inside_the_image")
     if job["stage"]=="caption" and not payload["concept"]:
         raise ValueError("develop_concept_before_caption")
     source=context()
@@ -37,9 +39,9 @@ def text_stage(store, job, payload):
         examples=[dict(r) for r in c.execute("SELECT verdict,explanation,content FROM production_examples WHERE format=? ORDER BY created_at DESC LIMIT 6",(rules["format_id"],))]
         recent=[json.loads(r[0]).get("concept",{}) for r in c.execute("SELECT payload FROM production_packages WHERE id<>? ORDER BY updated_at DESC LIMIT 12",(job["package_id"],))]
     if job["stage"]=="concept":
-        schema="Return JSON {human_moment,hook,payoff,visual_direction,brain_movement,heart_response,storyboard:[{action,dialogue,shot}],image_text:[string],novelty_reason}. Develop the premise before copy. Supply exactly one storyboard and one concise image_text string per format card; use an empty string when a frame needs no words. For controlled text, reserve the bottom 23% as negative space; keep faces, hands and the product clear of that region. For integrated text, words must physically interact with the scene. No permanent canon invention."
+        schema="Return JSON {human_moment,hook,payoff,visual_direction,brain_movement,heart_response,storyboard:[{action,dialogue,shot}],image_text:[string],novelty_reason}. Develop one worthwhile premise before writing copy. human_moment names the specific situation people recognize; payoff explains why they should care; visual_direction and each frame action show that relationship visibly. A viewer must understand the idea and its payoff from the image itself. If a product is shown, explain its supported role in the outcome and show a credible connection or action, not decorative placement. Do not force a power-outage or product scene onto product-free formats. Supply exactly one storyboard and one concise image_text string per format card; use an empty string when a frame needs no words. Use clear, natural language tied to the visible situation, not cryptic metaphors, generic motivation or empty power slogans. The exact approved words must be generated with the scene in one image request, never typeset afterward. Keep lettering readable at phone size without covering faces, hands or the important action. No permanent canon invention or unverified product capabilities."
         if rules.get("panels"):
-            schema+=" StoryPage exception: storyboard contains ONE page with panels:[{action,dialogue,speaker}] of exactly four panels. The first panel is the hero panel; subsequent panels progress top-to-bottom to an earned brand ending. Dialogue is at most 10 words per panel. image_text contains ONE string joining the exact panel dialogue in reading order. Leave text-free space at the bottom of each panel, not one page-wide headline region."
+            schema+=" StoryPage exception: storyboard contains ONE page with panels:[{action,dialogue,speaker}] of exactly four panels. The first panel is the hero panel; subsequent panels progress top-to-bottom to an earned brand ending. Dialogue is at most 10 words per panel. image_text contains ONE string joining the exact panel dialogue in reading order. Generate each exact dialogue line inside its corresponding panel as part of the original artwork."
     else:
         schema="Return JSON {captions: {"+",".join(p+': string' for p in payload["platforms"])+"}}. Captions add meaning beyond the declared image text. Respect the format, no forced sale or question, no universal paragraph/hashtag minimum."
     prompt=json.dumps({"task":schema,"owner_sources":owner,"rules":rules,"brief":payload["brief"],"locked_concept":payload["concept"],"image_text":payload["image_text"],"product_evidence":payload["evidence"],"product_sources":product_sources,"references":references,"examples":examples,"recent_concepts":recent},ensure_ascii=False)
@@ -51,14 +53,10 @@ def text_stage(store, job, payload):
         text=result.pop("image_text",[])
         if not isinstance(text,list) or len(text)!=rules["cards"] or any(not isinstance(s,str) for s in text):raise ValueError("concept_requires_exact_text_for_each_frame")
         if not isinstance(result.get("storyboard"),list) or len(result["storyboard"])!=rules["cards"]:raise ValueError("concept_storyboard_frame_count_mismatch")
-        if rules["typography"]=="controlled":
-            if rules.get("panels"):
-                panels=result["storyboard"][0].get("panels") or []
-                if len(panels)!=rules["panels"] or any(not isinstance(p,dict) or not p.get("action") or len(str(p.get("dialogue","")).split())>10 for p in panels):raise ValueError("storypage_requires_four_readable_panels")
-                positions=[(.295,.10),(.495,.075),(.675,.075),(.855,.09)]
-                result["text_layers"]=[[{"text":str(p["dialogue"]),"style":"dialogue","panel_index":i,"rect":[.06,positions[i][0],.88,positions[i][1]]} for i,p in enumerate(panels) if p.get("dialogue")]]
-                text=[" ".join(str(p.get("dialogue","")) for p in panels).strip()]
-            else:result["text_layers"]=[[{"text":s,"style":"headline","rect":[.06,.70,.88,.23]}] if s else [] for s in text]
+        if rules.get("panels"):
+            panels=result["storyboard"][0].get("panels") or []
+            if len(panels)!=rules["panels"] or any(not isinstance(p,dict) or not p.get("action") or len(str(p.get("dialogue","")).split())>10 for p in panels):raise ValueError("storypage_requires_four_readable_panels")
+            text=[" ".join(str(p.get("dialogue","")) for p in panels).strip()]
         for key in ["current_source","source_published_at","relevance_expires_at"]:
             if key in payload["concept"]:result[key]=payload["concept"][key]
         return {"concept":result,"image_text":text,"provenance":provenance}
@@ -74,6 +72,8 @@ def visual_stage(store, job, payload):
     multi-candidate fanout and hidden repairs; every repair is an explicit job.
     """
     if not payload["concept"]: raise ValueError("concept_required_before_visual_production")
+    if payload["rules"]["typography"] == "controlled":
+        raise ValueError("save_creative_edits_then_regenerate_text_inside_the_image")
     refs=store.references(payload["references"])
     if payload["rules"]["character"] and not any(r["kind"]=="character" for r in refs): raise ValueError("character_canon_required")
     if payload["rules"]["product"]=="required" and (not payload["evidence"] or not any(r["kind"]=="product" for r in refs)): raise ValueError("verified_product_evidence_and_reference_required")
@@ -85,15 +85,24 @@ def visual_stage(store, job, payload):
     from social.gemini_budget import reserve_gemini_call, complete_gemini_call
     from production_policy import digest
     import mimetypes
-    instructions={"rules":payload["rules"],"locked_concept":payload["concept"],"frame_index":index,
+    concept={key:value for key,value in payload["concept"].items() if key not in {"text_layers","protected_regions","protected_regions_by_frame"}}
+    instructions={"rules":payload["rules"],"locked_concept":concept,"frame_index":index,
         "frame":(payload["concept"].get("storyboard") or [])[index] if index<len(payload["concept"].get("storyboard") or []) else payload["concept"]["visual_direction"],
         "exact_image_text":payload["image_text"][index:index+1],"product_id":payload["product_id"],"product_role":payload["product_role"],"verified_evidence":payload["evidence"],
         "canon":[{"kind":r["kind"],"name":r["name"],"version":r["version"],"canon":r["canon"]} for r in refs]}
+    instructions["visual_purpose"] = {
+        "situation": payload["concept"].get("human_moment", ""),
+        "why_it_matters": payload["concept"].get("payoff", ""),
+        "visible_action": instructions["frame"],
+        "product_role": payload["product_role"],
+    }
     aspect=payload["rules"].get("aspect_ratio","4:5")
     prompt=f"Create ONE finished {aspect} image for this locked frame. Preserve approved identity, product geometry and story continuity from the attached references. Do not introduce new permanent canon or unsupported capabilities. "
-    if payload["rules"].get("panels"):prompt+="This is one 9:16 StoryPage with four distinct panels in top-to-bottom reading order: a large hero panel in the first 40%, then three smaller panels in the remaining space, ending in the branded story payoff. Match the exact panel actions and leave the declared dialogue rectangles unlettered. "
-    if payload["rules"]["typography"]=="controlled": prompt+="Create unlettered artwork with clear negative space for separately typeset text. No words, watermarks, invented labels or speech balloons. "
-    elif payload["rules"]["typography"]=="integrated": prompt+="Render ONLY the exact declared text, physically integrated with the scene, with correct spelling and credible perspective, shadow and interaction. "
+    prompt+="The image must make the reason for this post clear: show the specific situation, meaningful action and useful or emotional payoff as one idea. A product, when included, must visibly serve its verified role. Do not depend on the caption to explain an unrelated decorative scene. These image-text rules supersede any older unlettered-artwork, reserved-space or later-typesetting notes in the source concept. "
+    if payload["rules"].get("panels"):prompt+="This is one 9:16 StoryPage with four distinct panels in top-to-bottom reading order: a large hero panel in the first 40%, then three smaller panels in the remaining space, ending in the branded story payoff. Match the exact panel actions and generate each declared dialogue line inside its corresponding panel, once only. "
+    if payload["rules"]["typography"]=="integrated":
+        prompt+="Generate the scene and ONLY the exact declared text together in this single image request. Spell each supplied line exactly and render it once only. Compose clear, naturally contrasting typography with the scene, readable on a phone, without obscuring faces, hands, connections or the important action. Do not add slogans, labels, extra dialogue or gibberish. Do not reserve blank space for later typesetting; no text will be added afterward. "
+        if payload["rules"]["format_id"]=="superhero_text_integration":prompt+="The declared words must physically interact with the character and scene with credible perspective and material interaction. "
     else: prompt+="No visible lettering. "
     prompt+=json.dumps(instructions,ensure_ascii=False)
     contents=[prompt]
@@ -126,7 +135,7 @@ def visual_stage(store, job, payload):
     with Image.open(BytesIO(images[0])) as image:
         if min(image.size)<720:raise ValueError("provider_artwork_resolution_too_low")
         normalize(image,aspect).save(target,"PNG")
-    asset={**store.asset_record(str(target.relative_to(store.data_dir))),"provider":"gemini","model":model,"prompt_digest":digest(instructions),"frame_index":index}
+    asset={**store.asset_record(str(target.relative_to(store.data_dir))),"provider":"gemini","model":model,"prompt_digest":digest(prompt),"frame_index":index,"image_message_version":1,"message_sha256":visual_message_digest(payload,index)}
     existing=list(payload["assets"])
     if index<len(existing):existing[index]=asset
     else:existing.append(asset)
@@ -199,27 +208,7 @@ def run_one(store, owner="worker"):
                 assets.append({**asset,"inspection":{"sha256":store.asset_record(asset["path"])["sha256"],"expected":expected,"ocr":inspect_text(store.local_asset(asset["path"]),expected,regions=(asset.get("typography") or {}).get("layers"))}})
             updates={"assets":assets}
         elif job["stage"]=="typography":
-            if payload["rules"]["typography"]!="controlled":raise ValueError("this_format_requires_integrated_scene_text")
-            layers=payload["concept"].get("text_layers") or []
-            if len(layers)!=len(payload["assets"]):raise ValueError("text_layers_required_for_each_asset")
-            from production_typography import render
-            assets=[]
-            for index,asset in enumerate(payload["assets"]):
-                target=Path(store.data_dir)/"public_media"/f"type-{job['id']}-{index}.png"
-                source=asset.get("source_path") or asset["path"]
-                if not layers[index]:
-                    from PIL import Image
-                    from production_images import normalize
-                    with Image.open(store.local_asset(source)) as image:
-                        if min(image.size)<720:raise ValueError("source_artwork_resolution_too_low")
-                        normalize(image,payload["rules"].get("aspect_ratio","4:5")).save(target,"PNG")
-                    assets.append({**store.asset_record(str(target.relative_to(store.data_dir))),"source_path":source})
-                    continue
-                per_frame=payload["concept"].get("protected_regions_by_frame") or []
-                protected=per_frame[index] if index<len(per_frame) else payload["concept"].get("protected_regions",[])
-                receipt_type=render(store.local_asset(source),target,layers[index],protected=protected,aspect_ratio=payload["rules"].get("aspect_ratio","4:5"))
-                assets.append({**store.asset_record(str(target.relative_to(store.data_dir))),"source_path":source,"typography":receipt_type})
-            updates={"assets":assets}
+            raise ValueError("text_must_be_generated_inside_the_image_regenerate_the_frame")
         receipt.parent.mkdir(parents=True,exist_ok=True)
         temporary=receipt.with_suffix(".tmp")
         temporary.write_text(json.dumps({"revision":job["revision"],"updates":updates,"result":result}))

@@ -8,6 +8,7 @@ from pathlib import Path
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from contextlib import closing
 
 
 BACKUP_VERSION = 'production-desk-v1'
@@ -26,10 +27,10 @@ def backup_before_migration(data_dir: str) -> dict:
         lock.execute('BEGIN IMMEDIATE')
         if target.is_file() and metadata.is_file():
             return json.loads(metadata.read_text())
-        with sqlite3.connect(str(source),timeout=30) as original:
-            with sqlite3.connect(str(temporary)) as destination:
+        with closing(sqlite3.connect(str(source),timeout=30)) as original:
+            with closing(sqlite3.connect(str(temporary))) as destination:
                 original.backup(destination)
-        with sqlite3.connect(str(temporary)) as check:
+        with closing(sqlite3.connect(str(temporary))) as check:
             integrity=check.execute('PRAGMA integrity_check').fetchone()[0]
             if integrity!='ok': raise RuntimeError('pre_migration_backup_integrity_failed')
             tables={r[0] for r in check.execute("SELECT name FROM sqlite_master WHERE type='table'")}

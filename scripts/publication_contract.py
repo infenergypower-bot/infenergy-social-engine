@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 from typing import Any
+from social.scene_message import SCENE_MESSAGE_VERSION, SEMANTIC_QUALITY_VERSION
 
 
 class PackageState(str, Enum):
@@ -219,7 +220,7 @@ def evaluate_publication_readiness(
 
     strict_copy = copy_plan.get("strict_provider") is True
     if strict_copy:
-        if copy_plan.get("status") != "COMPLETE":
+        if copy_plan.get("status") != "COMPLETE" or copy_plan.get("scene_message_version") != SCENE_MESSAGE_VERSION:
             reasons.append(ReasonCode.PREPARATION_COPY_MISSING.value)
         elif not _passed_gates(copy_plan.get("qa"), MANDATORY_COPY_GATES):
             reasons.append(ReasonCode.QA_COPY_FAILED.value if isinstance(copy_plan.get("qa"), dict) else ReasonCode.QA_INCOMPLETE.value)
@@ -229,6 +230,13 @@ def evaluate_publication_readiness(
         required = int(generation.get("required_image_count") or 0)
         assets = generation.get("assets") if isinstance(generation.get("assets"), list) else []
         if generation.get("status") != "COMPLETE" or required < 1 or len(assets) != required:
+            reasons.append(ReasonCode.PREPARATION_ASSET_MISSING.value)
+        elif strict_copy and any(
+            not isinstance(asset, dict)
+            or not isinstance(asset.get("generation"), dict)
+            or asset["generation"].get("semantic_quality_gate_version") != SEMANTIC_QUALITY_VERSION
+            for asset in assets
+        ):
             reasons.append(ReasonCode.PREPARATION_ASSET_MISSING.value)
         visual_qa = generation.get("qa") or package.get("creative_qa")
         if not _passed_gates(visual_qa, MANDATORY_VISUAL_GATES):

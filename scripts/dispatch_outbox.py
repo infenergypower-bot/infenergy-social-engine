@@ -14,6 +14,7 @@ import publish_instagram
 import publish_linkedin
 from platform_publishing import get_status as get_platform_status
 from social import model_router
+from social.scene_message import SCENE_MESSAGE_VERSION, SEMANTIC_QUALITY_VERSION
 from social_visuals import build_product_image_approval, generate_strict_gemini_image, review_rendered_visual, strict_artifact_review_platform
 from build_monthly_content import _captions, _gemini_generation_plan, _load_current_news
 from content_operations import (
@@ -145,7 +146,7 @@ def _gemini_assets_ready(package: dict[str, Any], required_count: int) -> bool:
         and all(
             isinstance(asset, dict)
             and asset.get("render_engine") == "gemini"
-            and (asset.get("generation") or {}).get("semantic_quality_gate_version") == 2
+            and (asset.get("generation") or {}).get("semantic_quality_gate_version") == SEMANTIC_QUALITY_VERSION
             and os.path.isfile(str(asset.get("local_path") or ""))
             and str(asset.get("public_url") or "").startswith("http")
             and review_rendered_visual(str(asset.get("local_path") or ""), "instagram").get("verdict") == "PASS"
@@ -225,6 +226,7 @@ def _gemini_copy_ready(package: dict[str, Any]) -> bool:
         and copy_plan.get("status") == "COMPLETE"
         and bool(copy_plan.get("model_output_sha256"))
         and (copy_plan.get("qa") or {}).get("clarity") == "PASS"
+        and copy_plan.get("scene_message_version") == SCENE_MESSAGE_VERSION
     )
 
 
@@ -321,6 +323,7 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
         "image_scene": str(result["image_scene"]).strip(),
     })
     contract["visible_text"] = {key: str(visible[key]).strip() for key in ("headline", "infenergy_line", "resolution_line")}
+    thought["generation_contract"] = contract
     package.update({
         "thought_statement": thought["statement"],
         "generation_thought": thought,
@@ -360,57 +363,18 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
     if not claim_review.passed:
         raise RuntimeError(f"gemini_copy_claims_rejected:{','.join(claim_review.get('errors') or [])}")
 
-    old_statement = str(copy_plan.get("source_statement") or package.get("thought_statement") or "")
     from build_monthly_content import _gemini_generation_plan, _load_product_brief
     product_id = str(package.get("product_id") or thought.get("product_id") or "")
     product = _load_product_brief(data_dir, product_id) if product_id else None
     generation = _gemini_generation_plan(thought, product)
     package["gemini_generation"] = generation
-    for prompt_plan in generation.get("prompts") or []:
-        if not isinstance(prompt_plan, dict):
-            continue
-        scene_prompt = str(prompt_plan.get("gemini_image_prompt") or "")
-        if old_statement:
-            scene_prompt = scene_prompt.replace(old_statement, thought["statement"])
-        for legacy_instruction in (
-            "Keep every exact dialogue line readable inside Instagram Story safe areas. ",
-            "Do not render words, letters, logos, numbers, labels, watermarks, UI, badges, product claims, or fake specifications. ",
-            "Do not draw dialogue, captions, speech bubbles, labels, or lettering. ",
-        ):
-            scene_prompt = scene_prompt.replace(legacy_instruction, "")
-        prompt_plan["gemini_image_prompt"] = scene_prompt
-        prompt_plan["prompt_sha256"] = hashlib.sha256(scene_prompt.encode("utf-8")).hexdigest()
-        direction = prompt_plan.get("v5_direction") if isinstance(prompt_plan.get("v5_direction"), dict) else {}
-        overlay = direction.get("text_overlay") if isinstance(direction.get("text_overlay"), dict) else {}
-        rendered_text = [str(contract["visible_text"]["headline"]).strip()]
-        overlay.clear()
-        overlay["enabled"] = False
-        direction["gemini_rendered_text"] = rendered_text
-        direction["gemini_typography_contract"] = {
-            "exact_text_only": True,
-            "blue_shadow_allowed": False,
-            "blue_glow_allowed": False,
-            "duplicated_text_allowed": False,
-            "extra_text_allowed": False,
-            "hierarchy": "single editorial headline",
-            "placement": "scene-aware negative space",
-            "style": "premium editorial grotesk",
-        }
-        text_instruction = (
-            "Render these Gemini-authored lines directly into the finished image, each exactly once and spelled exactly: "
-            + json.dumps(rendered_text, ensure_ascii=True)
-            + ". Treat the typography with the same craft and specificity as the photography. Use one confident premium editorial grotesk with optical kerning, balanced tracking, and a deliberate line break only when it strengthens meaning. Build a clear single-headline hierarchy at roughly 8-12% of canvas height. Align it to a strong scene edge or subject gesture inside genuinely open negative space; never center it mechanically across the product or person's face. Choose warm white, charcoal, or restrained amber according to the local background for strong natural contrast. Integrate the headline into the composition so image and message read as one idea. Use crisp solid letterforms with no blue shadow, no blue glow, no neon edge, no outline, no bevel, no fake 3D extrusion, and no dark or translucent text box. Do not use a floating card, banner, pill, label, or generic poster lockup. Render the supplied headline once only. Do not repeat it at the bottom or add secondary captions. Render no other words, letters, numbers, captions, dialogue, labels, or logos."
-        )
-        direction["typography_render_instruction"] = text_instruction
-        prompt_plan["gemini_image_prompt"] = scene_prompt
-        prompt_plan["prompt_sha256"] = hashlib.sha256(scene_prompt.encode("utf-8")).hexdigest()
-
     output_digest = hashlib.sha256(json.dumps(result, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
     copy_plan.update({
         "status": "COMPLETE",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_route": model_router.route_for(str(copy_plan.get("task") or "copy_editing")),
         "model_output_sha256": output_digest,
+        "scene_message_version": SCENE_MESSAGE_VERSION,
         "qa": {"schema": "PASS", "forbidden_labels": "PASS", "clarity": "PASS", "product_claims": "PASS"},
     })
     package["gemini_copy"] = copy_plan
@@ -483,12 +447,12 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
         "qa": {
             gate: {
                 "status": "PASS",
-                "explanation": "All generated assets passed semantic QA v2 and deterministic artifact review.",
+                "explanation": "All generated assets passed scene-purpose, generated-text, and deterministic artifact review.",
                 "severity": "BLOCKING",
                 "evidence": [str(asset.get("local_path") or "") for asset in assets],
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "evaluator": "social_visuals.semantic_and_artifact_review",
-                "evaluator_version": "2",
+                "evaluator_version": str(SEMANTIC_QUALITY_VERSION),
             }
             for gate in ("TEXT_QA", "STORY_QA", "VISUAL_QA", "CONTINUITY_QA", "ORIGINALITY_QA", "EMOTIONAL_QA")
         },

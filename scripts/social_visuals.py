@@ -14,6 +14,7 @@ from typing import Any
 import requests
 
 from social.gemini_budget import GeminiBudgetExceeded, budget_snapshot, preflight_gemini_workflow, tracked_gemini_call
+from social.scene_message import SEMANTIC_QUALITY_VERSION, visual_story_instruction
 from url_safety import is_safe_http_url
 
 BASE_DIR = os.path.dirname(__file__)
@@ -546,6 +547,7 @@ def _gemini_semantic_plate_quality(
     product_reference: bytes = b"",
     expected_text_lines: list[str] | None = None,
     quality_profile: str = "",
+    visual_story: dict[str, Any] | None = None,
 ) -> tuple[bool, list[str]]:
     enabled = str(os.environ.get("GEMINI_VISUAL_QA_ENABLED", "true")).strip().lower() not in {"0", "false", "no"}
     if not enabled:
@@ -567,7 +569,7 @@ def _gemini_semantic_plate_quality(
             "The finished image must render each of these exact lines once, spelled exactly, with no other visible text: "
             f"{json.dumps(exact_lines, ensure_ascii=True)}. Typography must use crisp solid letterforms with no blue shadow, "
             "blue glow, neon edge, or dark translucent text box. The headline must be the unmistakable first-read element, "
-            "occupy roughly 12-18% of canvas height, and use bold or black weight, professional kerning and line breaks, "
+            "be legible at phone size, and use professional kerning and line breaks, "
             "strong natural contrast, an image-specific accent, and scene-aware placement in open negative space. "
             "It must not cover the product, face, hands, or key action, and must feel composed with the photograph rather than pasted on. "
         )
@@ -601,6 +603,15 @@ def _gemini_semantic_plate_quality(
         f"Consumer moment to verify: {json.dumps(moment, sort_keys=True)[:1800]}. Mark the corresponding consumer flag true "
         "when the person, setting, activity, or at least one required visual-evidence item is not visibly represented."
     )
+    if visual_story:
+        review_prompt += (
+            "\n" + visual_story_instruction(visual_story)
+            + " Return three additional booleans: visual_purpose_unclear, product_role_unclear, text_scene_mismatch. "
+            "Set visual_purpose_unclear if the scene does not communicate the intended situation and useful consequence. "
+            "For product scenes, set product_role_unclear if the product's useful action or connection cannot be seen. "
+            "For non-product editorial scenes set product_role_unclear=false. "
+            "Set text_scene_mismatch if the visible wording describes a different activity, situation, or benefit than the image shows."
+        )
     model_candidates = [
         str(os.environ.get("GEMINI_VISUAL_QA_MODEL", "")).strip(),
         "gemini-2.5-flash",
@@ -647,6 +658,8 @@ def _gemini_semantic_plate_quality(
                 )
             else:
                 failure_keys = ("product_missing", "looks_like_generic_ai_poster", *failure_keys)
+            if visual_story:
+                failure_keys = ("visual_purpose_unclear", "product_role_unclear", "text_scene_mismatch", *failure_keys)
             if exact_lines:
                 failure_keys = (
                     "text_missing_or_illegible",
@@ -719,7 +732,7 @@ def _build_gemini_image_prompt(content: dict[str, Any], platform: str, visual_pl
     v5_direction = _safe_json_dict(visual_plan.get("v5_direction"))
     v5_prompt = str(visual_plan.get("gemini_image_prompt") or "").strip()
     if v5_direction and v5_prompt:
-        return f"{consumer_scene}{v5_prompt[:2200]}\n{character_policy}"[:3200]
+        return f"{consumer_scene}{v5_prompt}\n{character_policy}"
     spec = _platform_visual_spec(platform)
     platform_key = platform.split("_", 1)[0]
     platform_cfg = _safe_json_dict((visual_plan.get("platform_overrides") or {}).get(platform))
@@ -1243,7 +1256,8 @@ def _generate_gemini_full_creative(
         )
         if not all(line in typography_instruction for line in gemini_rendered_text):
             typography_instruction = f"{exact_text_instruction} {typography_instruction}".strip()
-        prompt = f"{prompt}\n\n{typography_instruction}"
+        if typography_instruction not in prompt:
+            prompt = f"{prompt}\n\n{typography_instruction}"
     metadata["visual_prompt_hash"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     quality_profile = str(content.get("visual_quality_profile") or "")
     text_free_profile = quality_profile == "micro_mission_story"
@@ -1357,6 +1371,7 @@ def _generate_gemini_full_creative(
                         product_bytes or (character_reference_bytes if text_free_profile else b""),
                         gemini_rendered_text or content.get("expected_text_lines"),
                         str(content.get("visual_quality_profile") or ""),
+                        **({"visual_story": v5_direction["visual_story"]} if v5_direction.get("visual_story") else {}),
                     )
                     if not accepted:
                         rejection_reason = f"semantic_quality_rejected:{','.join(semantic_reasons)}"
@@ -1372,7 +1387,7 @@ def _generate_gemini_full_creative(
                         else:
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
                             generated.save(output_path, format="PNG", optimize=True)
-                            metadata["semantic_quality_gate_version"] = 2
+                            metadata["semantic_quality_gate_version"] = SEMANTIC_QUALITY_VERSION
                             return completed(True, "ok", model=model_name, retry_count=attempt)
                 reasons_by_model[model_name] = rejection_reason
                 if attempt + 1 < max_generation_attempts:

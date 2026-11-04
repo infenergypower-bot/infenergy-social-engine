@@ -29,8 +29,12 @@ def main():
         server=ThreadingHTTPServer(('127.0.0.1',0),worker.HealthHandler)
         url='http://127.0.0.1:'+str(server.server_address[1]);threading.Thread(target=server.serve_forever,daemon=True).start()
         from playwright.sync_api import sync_playwright
-        from PIL import Image
-        source=Path(data)/'source.png';Image.new('RGB',(1080,1350),'#1b3a2e').save(source)
+        from PIL import Image, ImageDraw, ImageFont
+        source=Path(data)/'source.png'
+        image=Image.new('RGB',(1080,1350),'#1b3a2e')
+        font=ImageFont.truetype(os.environ.get('INFENERGY_FONT_PATH','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'),60)
+        ImageDraw.Draw(image).text((70,950),'CHECK THE\nCABLE DRAWER',font=font,fill='white',spacing=12)
+        image.save(source)
         errors=[]
         with sync_playwright() as playwright:
             browser=playwright.chromium.launch(executable_path=args.chromium,headless=True,args=['--no-sandbox'])
@@ -49,22 +53,17 @@ def main():
             page.locator('[name=brain_movement]').fill('Recognize the shared household habit.')
             page.locator('[name=heart_response]').fill('A knowing smile and affection for family.')
             page.locator('[name=caption_instagram]').fill('Some household mysteries have a very short list of suspects.')
-            page.locator('[name=image_text]').fill('STAY CONNECTED')
+            page.locator('[name=image_text]').fill('CHECK THE CABLE DRAWER')
             page.locator('[name=account_instagram]').fill('approved-account')
             page.locator('[name=scheduled_at]').fill('2030-01-03T12:00:00+00:00')
-            page.get_by_role('button',name='Prepare bottom text layout').click()
+            assert page.get_by_role('button',name='Prepare bottom text layout').count()==0
+            assert page.get_by_role('button',name='Typeset controlled text').count()==0
             page.get_by_role('button',name='Save creative edits').click()
             page.wait_for_function("document.querySelector('#notice').textContent.includes('New revision saved')")
             page.locator('#upload-frames').set_input_files(source)
             page.wait_for_function("document.querySelector('#notice').textContent.includes('Frames uploaded')")
-            page.locator('#layout-placement').select_option('top')
-            page.locator('#layout-placement').select_option('bottom')
-            page.get_by_role('button',name='Save creative edits').click()
-            page.wait_for_function("document.querySelector('#notice').textContent.includes('New revision saved')")
-            page.get_by_role('button',name='Typeset controlled text').click()
-            page.wait_for_function("document.querySelector('#notice').textContent.includes('Production job queued')")
-            store=Production(data);assert run_one(store,'browser-test')
-            page.locator('#refresh').click();page.locator('[data-stage=inspect]').click()
+            store=Production(data)
+            page.locator('[data-stage=inspect]').click()
             page.wait_for_function("document.querySelector('#notice').textContent.includes('Production job queued')")
             assert run_one(store,'browser-test');page.locator('#refresh').click()
             for name in ['brand','caption','visual','mobile','canon','truth']:page.locator('#review-form [name='+name+']').check()
@@ -84,7 +83,7 @@ def main():
             assert not errors,errors
             item=store.snapshot()['packages'][0]
             assert item['outbox_id']
-            report={'passed':True,'browser_errors':errors,'verified':['authenticated API','draft creation and revisions','asset upload','local typesetting','real OCR inspection','owner review','revision-bound approval','outbox scheduling with dispatch disabled','five workspace pages','desktop and mobile layout'],'package_state':item['state'],'paid_ai_calls':0,'social_posts_sent':0}
+            report={'passed':True,'browser_errors':errors,'verified':['authenticated API','draft creation and revisions','finished image upload','generated-text editor without typesetting controls','real OCR inspection','owner review','revision-bound approval','outbox scheduling with dispatch disabled','five workspace pages','desktop and mobile layout'],'package_state':item['state'],'paid_ai_calls':0,'social_posts_sent':0}
             (artifacts/'browser-report.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
             browser.close()
         server.shutdown();server.server_close()

@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,8 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setenv('META_IG_USER_ID','approved-account')
     monkeypatch.setenv('CONTENT_DISPATCH_ENABLED','true')
     monkeypatch.setenv('ENABLE_INSTAGRAM','true')
+    if os.name == 'nt':
+        monkeypatch.setenv('INFENERGY_FONT_PATH', 'C:/Windows/Fonts/arialbd.ttf')
     return Production(str(tmp_path))
 
 
@@ -144,7 +147,11 @@ def test_failed_job_is_visible_and_retry_is_explicit(store,monkeypatch):
 def test_reference_and_asset_paths_cannot_escape_data_directory(store,tmp_path):
     with pytest.raises(ValueError):store.asset_record('../../etc/passwd')
     outside=tmp_path.parent/'outside.png';Image.new('RGB',(32,32)).save(outside)
-    (tmp_path/'escape.png').symlink_to(outside)
+    try:
+        (tmp_path/'escape.png').symlink_to(outside)
+    except OSError as exc:
+        if getattr(exc,'winerror',None)==1314:pytest.skip('Windows account cannot create symlinks')
+        raise
     with pytest.raises(ValueError):store.asset_record('escape.png')
 
 
@@ -178,7 +185,7 @@ def test_typography_fits_and_rejects_unreadable_or_overlapping_text(store):
     source=store.local_asset(asset(store)['path']);target=Path(store.data_dir)/'type.png'
     receipt=render(source,target,[{'text':'STAY CONNECTED','rect':[.06,.70,.88,.23]}])
     assert receipt['layers'][0]['font_size']>=43
-    assert receipt['ocr']['status']=='PASS',receipt
+    assert receipt['ocr']['status']==('PASS' if shutil.which('tesseract') else 'UNVERIFIED'),receipt
     with pytest.raises(ValueError,match='overlaps'):render(source,target,[{'text':'Hello','rect':[.06,.7,.88,.23]}],protected=[[.06,.7,.3,.2]])
     with pytest.raises(ValueError,match='does_not_fit'):render(source,target,[{'text':'A long story '*20,'rect':[.06,.70,.3,.1]}])
     with pytest.raises(ValueError,match='finite'):render(source,target,[{'text':'Hello','rect':[float('nan'),.7,.3,.1]}])
@@ -190,7 +197,7 @@ def test_final_pixel_inspection_is_required_after_text_edit(store):
     assert 'image_text_changed_reinspect_pixels' in store.checks(changed['id'])['errors']
     store.queue(changed['id'],'inspect',changed['revision']);run_one(store)
     changed=store.get(item['id'])
-    assert changed['payload']['assets'][0]['inspection']['ocr']['status']=='REVIEW_REQUIRED'
+    assert changed['payload']['assets'][0]['inspection']['ocr']['status'] in {'REVIEW_REQUIRED','UNVERIFIED'}
     assert 'ocr_exception_explanation_required' in store.checks(item['id'])['errors']
 
 
@@ -199,6 +206,46 @@ def test_brand_policy_allows_entertainment_and_integrated_scene_text():
     assert rules['typography']=='integrated'
     assert 'checkout_first' in rules['legacy_conflicts_superseded']
     with pytest.raises(ValueError):resolve('superhero_text_integration',overrides={'typography':'controlled'})
+
+
+def test_all_new_formats_generate_their_text_inside_the_image():
+    from production_policy import FAMILIES
+    for format_id in FAMILIES:
+        assert resolve(format_id)['typography'] == 'integrated'
+        with pytest.raises(ValueError, match='text_must_be_generated_inside_the_image'):
+            resolve(format_id, overrides={'typography':'controlled'})
+
+
+def test_old_draft_rules_upgrade_through_a_revision_without_losing_artwork(store):
+    item=complete(store)
+    with store.db() as c:
+        old=item['payload'];old['rules']['typography']='controlled';old['rules']['version']='creative-policy.v1'
+        c.execute('UPDATE production_packages SET payload=? WHERE id=?',(json.dumps(old),item['id']))
+    with pytest.raises(ValueError, match='save_creative_edits'):
+        store.queue(item['id'],'visual',item['revision'])
+    clone=store.clone(item['id'])
+    assert clone['payload']['rules']['typography']=='integrated'
+    assert clone['payload']['assets']==item['payload']['assets']
+    assert store.get(item['id'])['payload']['rules']['typography']=='controlled'
+    changed=store.revise(item['id'],{'title':'A clearer message'},item['revision'])
+    assert changed['payload']['rules']['typography']=='integrated'
+    assert changed['payload']['assets']==item['payload']['assets']
+    assert changed['revision']==item['revision']+1
+    with store.db() as c:
+        assert c.execute('SELECT COUNT(*) FROM production_revisions WHERE package_id=?',(item['id'],)).fetchone()[0]==changed['revision']
+
+
+def test_changed_image_words_require_regeneration_not_only_ocr(store):
+    from production_policy import visual_message_digest
+    item=complete(store)
+    generated={**item['payload']['assets'][0],'provider':'gemini','image_message_version':1,
+               'message_sha256':visual_message_digest(item['payload'],0)}
+    item=store.revise(item['id'],{'assets':[generated]},item['revision'])
+    assert 'image_message_changed_regenerate_the_frame' not in store.checks(item['id'])['errors']
+    item=store.revise(item['id'],{'image_text':['Check the cable drawer']},item['revision'])
+    assert 'image_message_changed_regenerate_the_frame' in store.checks(item['id'])['errors']
+    with pytest.raises(ValueError, match='text_must_be_generated_inside_the_image'):
+        store.queue(item['id'],'typography',item['revision'])
 
 
 def test_api_conflicts_and_static_workspace(store):
@@ -230,7 +277,7 @@ def test_frame_repair_preserves_other_frames_and_sends_reference_bytes(store,mon
     from google import genai
     item=store.create({'brief':'A coherent four-frame consumer story','format':'educational_story_carousel'})
     frames=[asset(store,'first.png','#112233'),asset(store,'second.png','#445566')]
-    item=store.revise(item['id'],{'concept':{'visual_direction':'A coherent kitchen scene'},'assets':frames},item['revision'])
+    item=store.revise(item['id'],{'concept':{'visual_direction':'A coherent kitchen scene','human_moment':'The charger is missing when the family needs it.','payoff':'Everyone knows where to put it back.'},'image_text':['','Give the charger a home','',''],'assets':frames},item['revision'])
     ref=store.register_reference({'kind':'brand','name':'Brand reference','canon':'Keep these colors','files':[frames[0]['path']]})
     item=store.revise(item['id'],{'references':[ref]},item['revision'])
     buffer=BytesIO();Image.new('RGB',(1080,1350),'#889977').save(buffer,'PNG')
@@ -241,6 +288,13 @@ def test_frame_repair_preserves_other_frames_and_sends_reference_bytes(store,mon
     assert changed['assets'][0]==frames[0]
     assert changed['assets'][1]['path']!=frames[1]['path']
     assert call.call_count==1
+    prompt=call.call_args.kwargs['contents'][0]
+    assert 'Give the charger a home' in prompt
+    assert 'The charger is missing when the family needs it.' in prompt
+    assert 'Everyone knows where to put it back.' in prompt
+    assert 'no text will be added afterward' in prompt
+    assert 'Create unlettered artwork' not in prompt
+    assert changed['assets'][1]['image_message_version']==1
     assert len(call.call_args.kwargs['contents'])==4  # prompt, canon bytes, continuity label and frame bytes
     from social.gemini_budget import budget_snapshot
     assert budget_snapshot()['image']['used']==1
@@ -327,7 +381,7 @@ def test_full_draft_sequence_is_atomic_and_stops_before_approval(store,monkeypat
         stages=[j['stage'] for j in reversed(store.snapshot()['jobs'])]
         assert len(stages)<10
     result=store.get(item['id'])
-    assert stages==['concept','caption','visual','typography','inspect']
+    assert stages==['concept','caption','visual','inspect']
     assert result['approval'] is None and result['outbox_id'] is None
     assert result['state']=='REVIEW'
     assert all(j['state']=='SUCCEEDED' for j in store.snapshot()['jobs'])
@@ -515,7 +569,7 @@ def test_typesetting_repairs_provider_aspect_without_another_image_call(store):
     target=source.with_name('normalized-type.png')
     receipt=render(source,target,[{'text':'STAY CONNECTED','rect':[.06,.70,.88,.23]}],aspect_ratio='4:5')
     with Image.open(target) as image:assert image.size==(1080,1350)
-    assert receipt['ocr']['status']=='PASS'
+    assert receipt['ocr']['status']==('PASS' if shutil.which('tesseract') else 'UNVERIFIED')
 
 
 def test_ocr_separates_faint_background_shapes_from_actual_missing_or_duplicate_text(monkeypatch,tmp_path):
@@ -535,12 +589,13 @@ def test_ocr_separates_faint_background_shapes_from_actual_missing_or_duplicate_
     assert inspect_text(tmp_path/'image.png',['STAY CONNECTED'])['status']=='REVIEW_REQUIRED'
 
 
+@pytest.mark.skipif(not shutil.which('tesseract'), reason='Tesseract OCR is not installed')
 def test_controlled_region_ocr_still_blocks_unexpected_words_elsewhere(store):
     from PIL import ImageDraw,ImageFont
     source=store.local_asset(asset(store)['path'])
     with Image.open(source) as original:
         image=original.convert('RGB');draw=ImageDraw.Draw(image)
-        draw.text((90,100),'UNEXPECTED WORD',font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',60),fill='white')
+        draw.text((90,100),'UNEXPECTED WORD',font=ImageFont.truetype(os.environ.get('INFENERGY_FONT_PATH','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'),60),fill='white')
         image.save(source)
     result=render(source,source.with_name('region-qa.png'),[{'text':'STAY CONNECTED','rect':[.06,.70,.88,.23]}])
     assert result['ocr']['inspection_mode']=='controlled_regions_and_full_background'

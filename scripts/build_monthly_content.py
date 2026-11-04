@@ -23,6 +23,7 @@ from content_operations import archive_candidate, cancel_unpublished_inventory, 
 from agents.learning_context import load_operational_learning
 from inventory_db import get_db_path
 from social.carousel_director import OFFICIAL_LOGO_URL, normalize_slide_dicts
+from social.scene_message import scene_message_direction, visual_story_instruction
 from social_visuals import build_product_image_approval
 from posting_schedule import first_scheduled_at, growth_schedule
 from consumer_life import assess_copy_fidelity, validate_consumer_receipt
@@ -561,7 +562,7 @@ def _gemini_generation_plan(thought: dict[str, Any], product: dict[str, Any] | N
         framing_instruction = (
             "Design a high-impact original Infenergy mission cover with the mission title as the first delivery frame. "
             if role == "COVER"
-            else "Reserve a clean lower-right brand zone for downstream composition of the attached official Infenergy logo; do not redraw, imitate, or place that logo in the environment. Show the ending revelation and support the moral, tagline, website, and call to action as the final delivery frame. "
+            else "Show the ending revelation and its useful human outcome as the final delivery frame. "
             if role == "FINALE"
             else ""
         )
@@ -595,13 +596,24 @@ def _gemini_generation_plan(thought: dict[str, Any], product: dict[str, Any] | N
             f"Visual execution: {visual_execution}. {contract_instruction}{product_instruction}{character_instruction}{framing_instruction}"
             f"This is slide {slide_index} of {len(slides)} with the role {slide['role']}. "
             "Show a believable real-life environment, natural human stakes, physically credible portable-energy context, "
-            "cinematic directional light, rich material detail, and generous protected negative space in the upper third for an editorial overlay. "
+            "cinematic directional light and rich material detail. Compose the scene and approved wording together. "
             "Use a restrained palette of charcoal, deep navy, warm amber, clean white, and natural environmental colors. "
             "Do not render any words, letters, logos, numbers, labels, watermarks, UI, badges, product claims, or fake specifications except the exact approved copy supplied at image-generation time. "
             "Avoid generic stock-photo smiles, disaster sensationalism, dominant purple, floating devices, visual clutter, and synthetic poster styling. "
             f"Output one finished {output_ratio} image only."
         )
         visible_text = contract.get("visible_text") if isinstance(contract.get("visible_text"), dict) else {}
+        message = scene_message_direction(
+            headline=str(overlay_copy if len(slides) > 1 else visible_text.get("headline") or overlay_copy),
+            supporting=str(slide.get("supporting") or "") if len(slides) > 1 else str(visible_text.get("infenergy_line") or slide.get("supporting") or ""),
+            resolution=str(visible_text.get("resolution_line") or ""),
+            problem=str(thought["statement"]),
+            outcome=str(thought["expansion"]),
+            scene=image_scene,
+            comic=is_story_page,
+        )
+        scene_prompt += "\n\n" + visual_story_instruction(message["visual_story"])
+        scene_prompt += "\n\n" + message["typography_render_instruction"]
         prompts.append({
             "slide_index": slide_index,
             "slide_count": len(slides),
@@ -612,18 +624,7 @@ def _gemini_generation_plan(thought: dict[str, Any], product: dict[str, Any] | N
                 "semantic_role": role,
                 "official_logo_path": OFFICIAL_LOGO_PATH if role == "FINALE" else "",
                 "official_logo_url": OFFICIAL_LOGO_URL if role == "FINALE" else "",
-                "text_overlay": {
-                    "enabled": True,
-                    "text": f"Infenergy | {overlay_copy}",
-                    "comic_panel_text": [
-                        str(visible_text.get("headline") or ""),
-                        str(visible_text.get("infenergy_line") or ""),
-                        str(visible_text.get("resolution_line") or ""),
-                    ] if is_product_comic else [],
-                    "placement": "upper third",
-                    "safe_margin_ratio": 0.055,
-                    "style": "editorial_truth_panel",
-                }
+                **message,
             },
         })
     return {

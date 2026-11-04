@@ -411,7 +411,7 @@ def test_gemini_renders_text_inside_original_image_prompt(tmp_path, monkeypatch)
         {"post_id": "two-pass"},
         "instagram",
         {
-            "gemini_image_prompt": "An architect charging a phone on a transit platform.",
+            "gemini_image_prompt": "An architect charging a phone on a transit platform. " + "Verified scene detail. " * 200 + "KEEP THIS COMPLETE BRIEF.",
             "v5_direction": {
                 "gemini_rendered_text": ["BLUEPRINTS DO NOT WAIT."],
                 "typography_render_instruction": "Use no blue shadow, glow, outline, or text box.",
@@ -426,6 +426,7 @@ def test_gemini_renders_text_inside_original_image_prompt(tmp_path, monkeypatch)
     base_prompt = calls[0] if isinstance(calls[0], str) else calls[0][0]
     assert "text-free base photograph" not in base_prompt
     assert "BLUEPRINTS DO NOT WAIT." in base_prompt
+    assert "KEEP THIS COMPLETE BRIEF." in base_prompt
     assert "Use no blue shadow, glow, outline, or text box." in base_prompt
     assert metadata["image_provider_call_count"] == 1
     assert metadata["local_text_overlay_used"] is False
