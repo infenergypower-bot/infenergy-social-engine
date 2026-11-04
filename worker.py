@@ -32,6 +32,7 @@ from social_visuals import review_rendered_visual
 from runtime_config import load_runtime_config, validate_startup_config
 
 RUN_LOCK = threading.Lock()
+DISPATCH_LOCK = threading.Lock()
 RUN_START_LOCK = threading.Lock()
 DEFERRED_RUN_LOCK = threading.Lock()
 LAST_RUN = {
@@ -1547,8 +1548,14 @@ class HealthHandler(BaseHTTPRequestHandler):
         if parsed.path in ("/", "/health", "/healthz"):
             startup = validate_startup_config()
             publishing = publishing_metrics(_data_dir())
+            production = None
+            if os.environ.get("EDITORIAL_APPROVAL_MODE","required") != "legacy":
+                from production_health import snapshot as production_health_snapshot
+                production = production_health_snapshot(_data_dir())
+            active_healthy = production.get("healthy",False) if production is not None else publishing["automation_status"] == "HEALTHY"
             payload = {
-                "status": "ok" if startup["status"] == "READY" and publishing["automation_status"] == "HEALTHY" else "degraded",
+                "status": "ok" if startup["status"] == "READY" and active_healthy else "degraded",
+                "production": production,
                 "service": "infenergy-social-engine",
                 "time_utc": _utc_now(),
                 "uptime_seconds": _uptime_seconds(),
@@ -2604,8 +2611,9 @@ class HealthHandler(BaseHTTPRequestHandler):
             return True
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length < 0 or length > 1_000_000:
-                raise ValueError("request body must be at most 1 MB")
+            ceiling = 12_000_000 if parsed.path == "/api/os/production/assets" else 1_000_000
+            if length < 0 or length > ceiling:
+                raise ValueError("request body exceeds route size limit")
             payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
             if not isinstance(payload, dict):
                 raise ValueError("request body must be a JSON object")
@@ -2975,7 +2983,7 @@ def run_content_factory() -> None:
 
 def dispatch_scheduled_slot(slot: str) -> None:
     """Publish due prepared content without generating or rewriting it."""
-    if not RUN_LOCK.acquire(blocking=False):
+    if not DISPATCH_LOCK.acquire(blocking=False):
         print(f"[DISPATCH] {slot} deferred because another content operation is active")
         return
     recovery_needed = False
@@ -3019,7 +3027,7 @@ def dispatch_scheduled_slot(slot: str) -> None:
         print(f"[DISPATCH] {slot} failed: {LAST_DISPATCH['error']}")
     finally:
         LAST_DISPATCH["finished_at_utc"] = _utc_now()
-        RUN_LOCK.release()
+        DISPATCH_LOCK.release()
     if recovery_needed:
         _start_factory_thread()
 
@@ -3073,7 +3081,8 @@ def run_delivery_watchdog() -> dict:
         "recovery_requested": needs_inventory,
     }
     autonomous_recovery = (
-        _env_is_true("AUTONOMOUS_AI_ENABLED", False)
+        os.environ.get("EDITORIAL_APPROVAL_MODE", "required") == "legacy"
+        and _env_is_true("AUTONOMOUS_AI_ENABLED", False)
         and _env_is_true("CONTENT_FACTORY_ENABLED", False)
     )
     result["autonomous_recovery_enabled"] = autonomous_recovery
@@ -3085,19 +3094,24 @@ def run_delivery_watchdog() -> dict:
 
 def register_scheduled_jobs() -> None:
     schedule.clear()
-    schedule.every().minute.do(resume_deferred_run)
+    legacy_generation = os.environ.get("EDITORIAL_APPROVAL_MODE", "required") == "legacy"
+    automatic_preparation = os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic'
+    if legacy_generation:
+        schedule.every().minute.do(resume_deferred_run)
     if os.environ.get("CONTENT_DISPATCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
         schedule.every().day.at(morning_utc).do(_start_dispatch_thread, "morning")
         schedule.every().day.at(midday_utc).do(_start_dispatch_thread, "midday")
         schedule.every().day.at(evening_utc).do(_start_dispatch_thread, "evening")
-        schedule.every(5).minutes.do(_start_dispatch_thread, "due_sweep")
+        schedule.every().minute.do(_start_dispatch_thread, "due_sweep")
         schedule.every(10).minutes.do(run_delivery_watchdog)
-    if _env_is_true("CONTENT_PREGENERATION_ENABLED", False):
+    if (legacy_generation or automatic_preparation) and _env_is_true("CONTENT_PREGENERATION_ENABLED", False):
         primary = str(os.environ.get("CONTENT_PREGENERATION_PRIMARY_UTC", "05:15")).strip()
         retry = str(os.environ.get("CONTENT_PREGENERATION_RETRY_UTC", "11:15")).strip()
         schedule.every().day.at(primary).do(_start_pregeneration_thread)
         schedule.every().day.at(retry).do(_start_pregeneration_thread)
-    autonomous_ai = os.environ.get("AUTONOMOUS_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        if automatic_preparation:
+            schedule.every(5).minutes.do(_start_pregeneration_thread)
+    autonomous_ai = legacy_generation and os.environ.get("AUTONOMOUS_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if autonomous_ai:
         if os.environ.get("CONTENT_FACTORY_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
             schedule.every(30).minutes.do(_start_factory_thread)
@@ -3135,7 +3149,8 @@ def main() -> None:
     else:
         print(f"Visual repo bootstrap failed: {bootstrap.get('error')}")
 
-    if os.environ.get("AUTONOMOUS_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
+    legacy_generation = os.environ.get("EDITORIAL_APPROVAL_MODE", "required") == "legacy"
+    if legacy_generation and os.environ.get("AUTONOMOUS_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
         run_intelligence_enrichment()
 
     init_content_operations(_data_dir())
@@ -3149,23 +3164,27 @@ def main() -> None:
     print("Meta refresh endpoint: /refresh-meta?token=... (uses META_REFRESH_TOKEN or MANUAL_RUN_TOKEN)")
     print("Waiting for next scheduled run...\n")
 
-    resume_deferred_run(recover_stale=True)
-    if _env_is_true("CONTENT_PREGENERATION_ENABLED", False) and _env_is_true("CONTENT_PREGENERATION_ON_STARTUP", False):
-        pregenerate_scheduled_content()
+    if legacy_generation:
+        resume_deferred_run(recover_stale=True)
+    if (legacy_generation or os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic') and _env_is_true("CONTENT_PREGENERATION_ENABLED", False) and _env_is_true("CONTENT_PREGENERATION_ON_STARTUP", False):
+        if legacy_generation:
+            pregenerate_scheduled_content()
+        else:
+            _start_pregeneration_thread()
     if os.environ.get("CONTENT_DISPATCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
         run_delivery_watchdog()
         _start_dispatch_thread("startup_sweep")
 
-    if os.environ.get("RUN_FACTORY_ON_STARTUP", "false").lower() in {"1", "true", "yes", "on"}:
+    if legacy_generation and os.environ.get("RUN_FACTORY_ON_STARTUP", "false").lower() in {"1", "true", "yes", "on"}:
         _start_factory_thread()
 
-    if os.environ.get("RUN_ON_STARTUP", "false").lower() == "true":
+    if legacy_generation and os.environ.get("RUN_ON_STARTUP", "false").lower() == "true":
         print("RUN_ON_STARTUP=true, launching startup run for morning slot")
         _start_slot_thread("morning")
 
     while True:
         schedule.run_pending()
-        time.sleep(30)
+        time.sleep(5)
 
 
 if __name__ == "__main__":

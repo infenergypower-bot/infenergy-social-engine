@@ -50,6 +50,17 @@ def resolve_product_canon(data_dir: str, product_id: str) -> dict[str, Any]:
 
 def attach_product_canon(data_dir: str, package: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(package)
+    if enriched.get("production_approval"):
+        # The owner-approved registry is authoritative for the new workflow.
+        # Verify the approval rather than trusting a caller-supplied canon stamp.
+        from publication_authorization import authorize
+        from production_workflow import Production
+        for platform in (enriched.get("routing") or {}).get("platforms",[]):
+            authorize(enriched,platform,data_dir=data_dir)
+        item=Production(data_dir).get(enriched["production_approval"]["package_id"])
+        payload=item["payload"]
+        enriched["canon"]={"required":bool(payload["rules"]["character"] or payload["product_id"]),"status":"RESOLVED", "canon_id":payload["product_id"] or "infenergy-brand", "canon_version":item["approval"]["digest"][:16],"reference_asset_ids":payload["references"],"registry":"production_references"}
+        return enriched
     product_id = str(enriched.get("product_id") or "").strip()
     if product_id:
         try:

@@ -1588,7 +1588,7 @@ def test_command_center_and_api_are_served(tmp_path):
     job = bootstrap(str(tmp_path)).jobs.create(
         job_type="campaign", objective="Visible completed campaign", plan=["produce"],
     )
-    status, content_type, page = handle("GET", "/os", None, str(tmp_path))
+    status, content_type, page = handle("GET", "/os/assets/advanced.html", None, str(tmp_path))
     api_status, api_type, payload = handle("GET", "/api/os/capabilities", None, str(tmp_path))
     job_status, job_type, job_payload = handle("GET", f"/api/os/jobs/{job['id']}", None, str(tmp_path))
     create_status, create_type, created_payload = handle(

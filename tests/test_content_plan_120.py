@@ -527,6 +527,9 @@ def test_plan_includes_the_complete_editorial_post_type_taxonomy(tmp_path):
     )
 
     expected_types = {
+        "infenergy_micro_mission",
+        "infenergy_storypage",
+        "superhero_text_integration",
         "current_event",
         "product_education",
         "statement",
@@ -539,8 +542,13 @@ def test_plan_includes_the_complete_editorial_post_type_taxonomy(tmp_path):
     }
     assert set(plan["post_type_taxonomy"]) == expected_types
     assert set(plan["post_type_counts"]) == expected_types
-    assert all(count > 0 for count in plan["post_type_counts"].values())
-    assert {entry["post_type"] for entry in plan["entries"]} == expected_types
+    # The taxonomy also advertises the three owner-selectable hero formats.
+    # This existing weekly plan assigns its original nine editorial post types.
+    optional_hero_types={"infenergy_micro_mission","infenergy_storypage","superhero_text_integration"}
+    planned_types=expected_types-optional_hero_types
+    assert all(plan["post_type_counts"][kind]>0 for kind in planned_types)
+    assert all(plan["post_type_counts"][kind]==0 for kind in optional_hero_types)
+    assert {entry["post_type"] for entry in plan["entries"]} == planned_types
     assert all(entry["post_type_label"] for entry in plan["entries"])
     assert all(
         entry["title"].startswith("Myth Check:") and entry["hook"].startswith("Myth:")

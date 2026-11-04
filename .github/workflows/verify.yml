@@ -1,0 +1,31 @@
+name: Verify social engine
+on:
+  pull_request:
+  push:
+    branches: [master, main, codex/infenergy-production-desk]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOCIAL_DRY_RUN: "true"
+      CONTENT_DISPATCH_ENABLED: "false"
+      AUTONOMOUS_AI_ENABLED: "false"
+      GEMINI_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr fonts-dejavu-core
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip check
+      - run: node --check social_engine/intelligence_os/ui/production.js
+      - run: node --check social_engine/intelligence_os/ui/app.js
+      - run: python -m pytest -q

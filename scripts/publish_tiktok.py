@@ -33,6 +33,9 @@ def _video_url(content: dict[str, Any]) -> str:
     return url
 
 
+from publication_authorization import guarded as _editorial_guard
+
+@_editorial_guard("tiktok")
 def publish(content: dict[str, Any], dry_run: bool = False) -> dict[str, Any]:
     video_url = _video_url(content)
     title = str(content.get("tiktok_caption") or content.get("ig_caption") or content.get("fb_caption") or "Infenergy Story").strip()[:2200]

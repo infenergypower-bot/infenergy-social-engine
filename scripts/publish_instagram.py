@@ -31,6 +31,8 @@ def _post_with_retry(url: str, data: dict, timeout: int = 30) -> requests.Respon
         last = resp
         if resp.ok:
             return resp
+        if resp.status_code >= 500 and url.rstrip('/').endswith('/media_publish'):
+            raise requests.Timeout("publication_outcome_unknown_after_server_error")
 
         if resp.status_code not in (429, 500, 502, 503, 504):
             return resp
@@ -39,7 +41,6 @@ def _post_with_retry(url: str, data: dict, timeout: int = 30) -> requests.Respon
             time.sleep(wait_s)
 
     return last if last is not None else requests.Response()
-
 
 def _graph_error_text(resp: requests.Response) -> str:
     try:
@@ -211,10 +212,10 @@ def _publish_reel(content: dict, *, dry_run: bool) -> dict:
     return result
 
 
-def _publish_story_video(video_url: str, *, ig_user_id: str, access_token: str) -> dict:
+def _publish_story_video(video_url: str, *, ig_user_id: str, access_token: str, image_url: str | None = None) -> dict:
     response = _post_with_retry(
         f"{GRAPH_BASE}/{ig_user_id}/media",
-        {"media_type": "STORIES", "video_url": video_url, "access_token": access_token},
+        {"media_type": "STORIES", **({"image_url":image_url} if image_url else {"video_url":video_url}), "access_token": access_token},
         timeout=45,
     )
     if not response.ok:
@@ -291,10 +292,18 @@ def _extract_page_image_candidate(page_url: str, timeout: int = 15) -> str:
         return ""
 
 
+from publication_authorization import guarded as _editorial_guard
+
+@_editorial_guard("instagram")
 def publish(content: dict, dry_run: bool = False) -> dict:
     media_type = str(((content.get("platform_posts") or {}).get("instagram") or {}).get("media_type") or "").strip().upper()
     if media_type == "REEL":
         return _publish_reel(content, dry_run=dry_run)
+    if media_type == "STORY":
+        story_url=str(content.get("primary_publish_image_url") or ((content.get("platform_posts") or {}).get("instagram") or {}).get("image_url") or "")
+        if not story_url.startswith("https://"):raise ValueError("instagram_story_image_url_required")
+        if dry_run:return {"id":"dry-run","media_type":"STORY"}
+        return _publish_story_video("",ig_user_id=_required_env("META_IG_USER_ID"),access_token=_required_env("META_PAGE_ACCESS_TOKEN"),image_url=story_url)
 
     ig_default_image = _env("IG_DEFAULT_IMAGE_URL")
     validate_urls = _env("IG_VALIDATE_IMAGE_URLS", "true").lower() in ("1", "true", "yes", "on")

@@ -58,6 +58,7 @@ def route_candidates(task: str) -> list[str]:
 
 _LAST_ERROR: str | None = None
 _PROVIDER_UNAVAILABLE_REASON: str | None = None
+_PROVIDER_RETRY_AT = 0.0
 
 
 def last_error() -> str | None:
@@ -84,10 +85,11 @@ def generate_json(task: str, prompt: str, *, system_instruction: str = "") -> di
     Returns ``None`` when GEMINI_API_KEY is unset, the SDK is unavailable,
     or the call/parse fails for any reason.
     """
-    global _LAST_ERROR, _PROVIDER_UNAVAILABLE_REASON
-    if _PROVIDER_UNAVAILABLE_REASON:
+    global _LAST_ERROR, _PROVIDER_UNAVAILABLE_REASON, _PROVIDER_RETRY_AT
+    if _PROVIDER_UNAVAILABLE_REASON and time.monotonic() < _PROVIDER_RETRY_AT:
         _LAST_ERROR = _PROVIDER_UNAVAILABLE_REASON
         return None
+    _PROVIDER_UNAVAILABLE_REASON = None
 
     api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
@@ -100,7 +102,7 @@ def generate_json(task: str, prompt: str, *, system_instruction: str = "") -> di
         _LAST_ERROR = "google-genai SDK not importable"
         return None
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=60_000, retry_options=types.HttpRetryOptions(attempts=1)))
     errors: list[str] = []
     for model in route_candidates(task):
         try:
@@ -130,6 +132,7 @@ def generate_json(task: str, prompt: str, *, system_instruction: str = "") -> di
             errors.append(error)
             if "RESOURCE_EXHAUSTED" in str(exc).upper() or "429" in str(exc):
                 _PROVIDER_UNAVAILABLE_REASON = f"Gemini provider unavailable: {error}"
+                _PROVIDER_RETRY_AT = time.monotonic() + 60
                 break
     _LAST_ERROR = f"task={task}: " + " | ".join(errors)
     print(f"[model_router] {_LAST_ERROR}")

@@ -44,3 +44,12 @@ def test_author_accepts_infenergy_in_every_platform_caption():
         result = on_image_text_author.author({"content_job": "TEACH"})
 
     assert all("Infenergy" in caption for caption in result["platform_captions"].values())
+
+
+def test_production_editor_does_not_force_brand_words_or_hardware(monkeypatch):
+    monkeypatch.setenv('PRODUCTION_QUALITY_ENABLED','true')
+    with patch.object(on_image_text_author.model_router,'generate_json',return_value=_authored_result(include_brand=False)) as generate:
+        on_image_text_author.author({'content_job':'TEACH'})
+    prompt=generate.call_args.args[1]
+    assert 'do not force a brand mention' in prompt
+    assert 'A product-free or non-outage scene is valid' in prompt

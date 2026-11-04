@@ -104,7 +104,12 @@ class EditorialDirectorTests(unittest.TestCase):
         }
 
         with patch.object(generate_posts, "run_social_intelligence", side_effect=lambda **kwargs: captured.update(kwargs) or []), patch.object(
-            generate_posts, "_living_strategy_for_generation", return_value=({}, {})
+            generate_posts, "_living_strategy_for_generation", return_value=({
+                "audience":"households", "customer_moment":"a familiar energy mistake",
+                "human_need":"stay connected", "angle":"learn through a story",
+                "positioning":"preparedness", "non_price_edge":"practical fit",
+                "benefit":"less interruption", "human_outcome":"capability", "claim_limits":"verified product facts only",
+            }, {})
         ):
             generate_posts._route_generate_orchestrator("midday", recurring_series=series)
 

@@ -14,6 +14,7 @@ import publish_instagram
 import publish_linkedin
 from platform_publishing import get_status as get_platform_status
 from social import model_router
+from social.scene_message import SCENE_MESSAGE_VERSION, SEMANTIC_QUALITY_VERSION
 from social_visuals import build_product_image_approval, generate_strict_gemini_image, review_rendered_visual, strict_artifact_review_platform
 from build_monthly_content import _captions, _gemini_generation_plan, _load_current_news
 from content_operations import (
@@ -34,10 +35,13 @@ from content_operations import (
     upcoming_ready_packages,
     update_claimed_package,
     update_ready_package,
+    replace_rejected_candidate,
+    last_preparation_quality_rejection,
 )
 from publication_contract import PackageState
 from runtime_config import load_runtime_config
 from social.gemini_budget import GeminiBudgetExceeded, preflight_gemini_workflow
+from social.post_candidates import CandidateQualityError
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
 FORBIDDEN_PUBLIC_LABELS = ("POV:", "FIELD TRUTH")
@@ -55,6 +59,7 @@ ACTION_WORDS = {
 
 
 def _copy_clarity_issues(result: dict[str, Any]) -> list[str]:
+    from social.production_quality import enabled as quality_enabled
     captions = result.get("platform_captions") if isinstance(result.get("platform_captions"), dict) else {}
     issues: list[str] = []
     for platform in PLATFORMS:
@@ -63,6 +68,9 @@ def _copy_clarity_issues(result: dict[str, Any]) -> list[str]:
         words = set(normalized.split())
         if any(phrase in normalized for phrase in AMBIGUOUS_COPY_PHRASES):
             issues.append(f"{platform}_ambiguous_language")
+        if quality_enabled():
+            if not caption:issues.append(f'{platform}_caption_missing')
+            continue  # The independent editor evaluates purpose, natural wording, and usefulness.
         if "infenergy" not in words:
             issues.append(f"{platform}_infenergy_role_missing")
         if not words.intersection(ACTION_WORDS):
@@ -145,13 +153,66 @@ def _gemini_assets_ready(package: dict[str, Any], required_count: int) -> bool:
         and all(
             isinstance(asset, dict)
             and asset.get("render_engine") == "gemini"
-            and (asset.get("generation") or {}).get("semantic_quality_gate_version") == 2
+            and (asset.get("generation") or {}).get("semantic_quality_gate_version") == SEMANTIC_QUALITY_VERSION
             and os.path.isfile(str(asset.get("local_path") or ""))
             and str(asset.get("public_url") or "").startswith("http")
             and review_rendered_visual(str(asset.get("local_path") or ""), "instagram").get("verdict") == "PASS"
             for asset in assets
         )
     )
+
+
+def _delivery_media_ready(package: dict[str, Any]) -> bool:
+    if 'instagram' not in configured_platforms(package):return True
+    if (package.get('gemini_generation') or {}).get('aspect_ratio')=='9:16' and ((package.get('platform_posts') or {}).get('instagram') or {}).get('media_type')!='STORY':return False
+    from PIL import Image
+    assets=(package.get('gemini_generation') or {}).get('assets') or []
+    if not assets:return False
+    try:
+        for asset in assets:
+            path=str(asset.get('local_path') or '')
+            with Image.open(path) as image:
+                if image.format!='JPEG' or image.mode!='RGB' or not path.lower().endswith(('.jpg','.jpeg')) or image.getexif().get(274,1)!=1:return False
+    except (OSError,ValueError):return False
+    return True
+
+
+def _prepare_delivery_media(package: dict[str, Any], data_dir: str) -> dict[str, Any]:
+    """Encode Instagram delivery files before the final pixel-bound review."""
+    if _delivery_media_ready(package):return package
+    from pathlib import Path
+    from PIL import Image,ImageOps
+    root=(Path(data_dir)/'public_media').resolve()
+    generation=package.get('gemini_generation') or {}
+    assets=[]
+    platform=strict_artifact_review_platform(package,'instagram')
+    for record in generation.get('assets') or []:
+        asset=dict(record);source=Path(asset['local_path']).resolve()
+        if source.parent!=root or not source.is_file():raise ValueError('delivery_asset_must_be_in_public_media')
+        with Image.open(source) as image:
+            if image.format!='JPEG' or image.mode!='RGB' or source.suffix.lower() not in {'.jpg','.jpeg'} or image.getexif().get(274,1)!=1:
+                target=source.with_name(source.stem+'-delivery.jpg')
+                temporary=target.with_suffix('.partial.jpg')
+                ImageOps.exif_transpose(image).convert('RGB').save(temporary,'JPEG',quality=95,subsampling=0,optimize=True)
+                os.replace(temporary,target)
+                asset.update(source_local_path=str(source),local_path=str(target),public_url=_public_media_url(target.name),delivery_encoding='JPEG',delivery_encoded_at_utc=datetime.now(timezone.utc).isoformat())
+        asset['sha256']=hashlib.sha256(Path(asset['local_path']).read_bytes()).hexdigest()
+        asset['review']=review_rendered_visual(asset['local_path'],platform)
+        if asset['review'].get('verdict')!='PASS':raise ValueError('delivery_encoding_artifact_review_failed')
+        assets.append(asset)
+    if not assets:raise ValueError('delivery_assets_required')
+    generation['assets']=assets
+    package['gemini_generation']=generation
+    package['carousel_assets']=assets if len(assets)>1 else []
+    package['primary_publish_image_url']=assets[0]['public_url']
+    for p in configured_platforms(package):
+        package.setdefault('generated_visuals',{})[p]=assets[0]['local_path']
+        package['generated_visuals'].setdefault('artifact_reviews',{})[p]=assets[0]['review']
+        post=package.setdefault('platform_posts',{}).setdefault(p,{'platform':p})
+        post['image_url']=assets[0]['public_url']
+        if p=='instagram' and generation.get('aspect_ratio')=='9:16':post['media_type']='STORY'
+        if len(assets)>1:post['image_urls']=[a['public_url'] for a in assets]
+    return package
 
 
 def _refresh_current_news_package(package: dict[str, Any]) -> dict[str, Any]:
@@ -219,12 +280,17 @@ def _strict_publish_artifact_error(package: dict[str, Any], platform: str) -> st
 
 def _gemini_copy_ready(package: dict[str, Any]) -> bool:
     copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
+    editorial_ready=False
+    if copy_plan.get('provider')=='editorial_bank':
+        from editorial_calendar import copy_digest
+        editorial_ready=(package.get('editorial_bank') or {}).get('reviewed_copy_sha256')==copy_digest(package) and (package.get('production_quality') or {}).get('plan',{}).get('status')=='PASS'
     return (
-        copy_plan.get("provider") == "gemini"
+        (copy_plan.get("provider") == "gemini" or editorial_ready)
         and copy_plan.get("strict_provider") is True
         and copy_plan.get("status") == "COMPLETE"
         and bool(copy_plan.get("model_output_sha256"))
         and (copy_plan.get("qa") or {}).get("clarity") == "PASS"
+        and copy_plan.get("scene_message_version") == SCENE_MESSAGE_VERSION
     )
 
 
@@ -240,6 +306,9 @@ def _hydrate_product_image_approval(package: dict[str, Any]) -> dict[str, Any]:
 
 def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> dict[str, Any]:
     copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
+    if copy_plan.get('provider')=='editorial_bank':
+        if _gemini_copy_ready(package):return package
+        raise RuntimeError('editorial_bank_requires_fresh_copy_review')
     if copy_plan.get("provider") != "gemini" or copy_plan.get("strict_provider") is not True or copy_plan.get("fallback_allowed") is not False:
         raise RuntimeError("strict_gemini_copy_contract_missing")
     if _gemini_copy_ready(package):
@@ -250,6 +319,12 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
     receipt = package.get("consumer_receipt") if isinstance(package.get("consumer_receipt"), dict) else {}
     brief = {
         "brand": "Infenergy Power",
+        "caption_requirements": {
+            "minimum_complete_sentences": 2,
+            "minimum_distinct_words": 14,
+            "instruction": "Each caption must give a specific action the reader can take, using at least one of these plain action verbs in its base form.",
+            "action_verbs": sorted(ACTION_WORDS),
+        },
         "content_date": package.get("content_date"),
         "format": contract.get("format"),
         "audience": contract.get("audience_name") or thought.get("audience"),
@@ -269,6 +344,8 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
             "cta": contract.get("cta") or thought.get("action"),
         },
     }
+    from social.post_candidates import replacement_brief
+    if replacement_brief(package):brief['replacement_post']=replacement_brief(package)
     from agents.dispatcher import run_agent
     author_receipt = run_agent("on_image_text_author", data_dir, {"brief": brief})
     if author_receipt.get("error"):
@@ -311,6 +388,8 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
     clarity_issues = _copy_clarity_issues(result)
     if clarity_issues:
         raise RuntimeError(f"gemini_copy_clarity_rejected:{','.join(clarity_issues)}")
+    from social.post_candidates import require_fresh_post
+    require_fresh_post(package,result)
 
     thought.update({
         "statement": str(result["statement"]).strip(),
@@ -320,7 +399,12 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
         "action": str(result["action"]).strip(),
         "image_scene": str(result["image_scene"]).strip(),
     })
+    if package.get('candidate_recovery'):
+        package['title']=str(visible['headline']).strip()
+        package['candidate_recovery']['status']='REPLACEMENT_DRAFTED'
     contract["visible_text"] = {key: str(visible[key]).strip() for key in ("headline", "infenergy_line", "resolution_line")}
+    contract['typography_design']=result['typography_design']
+    thought["generation_contract"] = contract
     package.update({
         "thought_statement": thought["statement"],
         "generation_thought": thought,
@@ -360,57 +444,18 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
     if not claim_review.passed:
         raise RuntimeError(f"gemini_copy_claims_rejected:{','.join(claim_review.get('errors') or [])}")
 
-    old_statement = str(copy_plan.get("source_statement") or package.get("thought_statement") or "")
     from build_monthly_content import _gemini_generation_plan, _load_product_brief
     product_id = str(package.get("product_id") or thought.get("product_id") or "")
     product = _load_product_brief(data_dir, product_id) if product_id else None
     generation = _gemini_generation_plan(thought, product)
     package["gemini_generation"] = generation
-    for prompt_plan in generation.get("prompts") or []:
-        if not isinstance(prompt_plan, dict):
-            continue
-        scene_prompt = str(prompt_plan.get("gemini_image_prompt") or "")
-        if old_statement:
-            scene_prompt = scene_prompt.replace(old_statement, thought["statement"])
-        for legacy_instruction in (
-            "Keep every exact dialogue line readable inside Instagram Story safe areas. ",
-            "Do not render words, letters, logos, numbers, labels, watermarks, UI, badges, product claims, or fake specifications. ",
-            "Do not draw dialogue, captions, speech bubbles, labels, or lettering. ",
-        ):
-            scene_prompt = scene_prompt.replace(legacy_instruction, "")
-        prompt_plan["gemini_image_prompt"] = scene_prompt
-        prompt_plan["prompt_sha256"] = hashlib.sha256(scene_prompt.encode("utf-8")).hexdigest()
-        direction = prompt_plan.get("v5_direction") if isinstance(prompt_plan.get("v5_direction"), dict) else {}
-        overlay = direction.get("text_overlay") if isinstance(direction.get("text_overlay"), dict) else {}
-        rendered_text = [str(contract["visible_text"]["headline"]).strip()]
-        overlay.clear()
-        overlay["enabled"] = False
-        direction["gemini_rendered_text"] = rendered_text
-        direction["gemini_typography_contract"] = {
-            "exact_text_only": True,
-            "blue_shadow_allowed": False,
-            "blue_glow_allowed": False,
-            "duplicated_text_allowed": False,
-            "extra_text_allowed": False,
-            "hierarchy": "single editorial headline",
-            "placement": "scene-aware negative space",
-            "style": "premium editorial grotesk",
-        }
-        text_instruction = (
-            "Render these Gemini-authored lines directly into the finished image, each exactly once and spelled exactly: "
-            + json.dumps(rendered_text, ensure_ascii=True)
-            + ". Treat the typography with the same craft and specificity as the photography. Use one confident premium editorial grotesk with optical kerning, balanced tracking, and a deliberate line break only when it strengthens meaning. Build a clear single-headline hierarchy at roughly 8-12% of canvas height. Align it to a strong scene edge or subject gesture inside genuinely open negative space; never center it mechanically across the product or person's face. Choose warm white, charcoal, or restrained amber according to the local background for strong natural contrast. Integrate the headline into the composition so image and message read as one idea. Use crisp solid letterforms with no blue shadow, no blue glow, no neon edge, no outline, no bevel, no fake 3D extrusion, and no dark or translucent text box. Do not use a floating card, banner, pill, label, or generic poster lockup. Render the supplied headline once only. Do not repeat it at the bottom or add secondary captions. Render no other words, letters, numbers, captions, dialogue, labels, or logos."
-        )
-        direction["typography_render_instruction"] = text_instruction
-        prompt_plan["gemini_image_prompt"] = scene_prompt
-        prompt_plan["prompt_sha256"] = hashlib.sha256(scene_prompt.encode("utf-8")).hexdigest()
-
     output_digest = hashlib.sha256(json.dumps(result, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
     copy_plan.update({
         "status": "COMPLETE",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_route": model_router.route_for(str(copy_plan.get("task") or "copy_editing")),
         "model_output_sha256": output_digest,
+        "scene_message_version": SCENE_MESSAGE_VERSION,
         "qa": {"schema": "PASS", "forbidden_labels": "PASS", "clarity": "PASS", "product_claims": "PASS"},
     })
     package["gemini_copy"] = copy_plan
@@ -429,11 +474,13 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
     if required_count < 1 or len(prompts) != required_count:
         raise RuntimeError("gemini_prompt_count_mismatch")
     if _gemini_assets_ready(package, required_count):
-        return package
+        return _prepare_delivery_media(package,data_dir)
 
     public_dir = os.path.join(data_dir, "public_media")
     os.makedirs(public_dir, exist_ok=True)
     post_id = str(package.get("post_id") or package.get("content_id") or "monthly")
+    if package.get('candidate_recovery'):
+        post_id += '_candidate_' + str(package['candidate_recovery']['candidate_number'])
     generation_platform = {
         "9:16": "iis_reel_cover",
         "4:5": "iis_carousel",
@@ -483,12 +530,12 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
         "qa": {
             gate: {
                 "status": "PASS",
-                "explanation": "All generated assets passed semantic QA v2 and deterministic artifact review.",
+                "explanation": "All generated assets passed scene-purpose, generated-text, and deterministic artifact review.",
                 "severity": "BLOCKING",
                 "evidence": [str(asset.get("local_path") or "") for asset in assets],
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "evaluator": "social_visuals.semantic_and_artifact_review",
-                "evaluator_version": "2",
+                "evaluator_version": str(SEMANTIC_QUALITY_VERSION),
             }
             for gate in ("TEXT_QA", "STORY_QA", "VISUAL_QA", "CONTINUITY_QA", "ORIGINALITY_QA", "EMOTIONAL_QA")
         },
@@ -506,10 +553,13 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
         "artifact_reviews": {platform: first["review"] for platform in PLATFORMS},
         "gemini_generated_at_utc": generation["generated_at_utc"],
     }
-    return package
+    return _prepare_delivery_media(package,data_dir)
 
 
 def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = None) -> dict[str, Any]:
+    from social import production_quality as quality
+    from social import post_candidates as candidates
+    targeted = bool(outbox_id)
     lead_minutes = load_runtime_config().preparation_lead_time_minutes
     now_utc = datetime.now(timezone.utc)
     before_utc = (now_utc + timedelta(minutes=lead_minutes)).isoformat()
@@ -524,6 +574,29 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
     budget_blocked_result: dict[str, Any] | None = None
     for row in rows:
         package = row["package"]
+        from publication_authorization import assert_not_scrapped
+        try:
+            assert_not_scrapped(package, data_dir)
+        except ValueError:
+            continue
+        if candidates.automatic():
+            recovery=package.get('candidate_recovery') or {}
+            if not recovery and row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED','BLOCKED_BUDGET'}:
+                failure=candidates.rejection(package) or last_preparation_quality_rejection(data_dir,str(row['outbox_id']),package)
+                if failure:
+                    replacement=candidates.replace(package,failure)
+                    queued=replace_rejected_candidate(data_dir,str(row['outbox_id']),package,replacement)
+                    return {'status':'REPLACEMENT_QUEUED' if queued else 'DEFERRED','outbox_id':row['outbox_id']}
+            if recovery.get('status')=='REPLACEMENT_QUEUED' and recovery.get('next_candidate_at') and datetime.fromisoformat(recovery['next_candidate_at'])>now_utc:
+                continue
+            if row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED'} and recovery.get('status')!='REPLACEMENT_QUEUED' and not targeted:
+                failure=candidates.rejection(package)
+                if not failure:continue  # Credential, provider and configuration errors need repair, not new creative.
+                replacement=candidates.replace(package,failure)
+                queued=replace_rejected_candidate(data_dir,str(row['outbox_id']),package,replacement)
+                return {'status':'REPLACEMENT_QUEUED' if queued else 'DEFERRED','outbox_id':row['outbox_id']}
+        elif os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic' and row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED'} and not targeted:
+            continue
         if package.get("weekly_role") == "current_news":
             scheduled_at = datetime.fromisoformat(str(row["scheduled_at"]).replace("Z", "+00:00"))
             if scheduled_at > news_before_utc:
@@ -532,16 +605,22 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
         generation = package.get("gemini_generation") if isinstance(package.get("gemini_generation"), dict) else {}
         required_count = int(generation.get("required_image_count") or 0)
         copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
-        if generation.get("strict_provider") is not True or (_gemini_copy_ready(package) and _gemini_assets_ready(package, required_count)):
+        images_ready=_gemini_copy_ready(package) and _gemini_assets_ready(package,required_count)
+        media_ready=_delivery_media_ready(package)
+        if generation.get("strict_provider") is not True or (images_ready and media_ready and (not quality.enabled() or quality.ready(package,data_dir))):
             continue
         outbox_id = str(row["outbox_id"])
         try:
             lifecycle_state = row.get("lifecycle_state")
+            image_calls=0 if images_ready else required_count
+            quality_calls=int(not quality.current(package,data_dir,'plan'))+int(not quality.current(package,data_dir,'release') or not media_ready) if quality.enabled() else 0
+            # Screen replacement concepts with text calls even when today's image budget is empty.
+            screening=candidates.automatic() and not quality.current(package,data_dir,'plan')
+            preflight_images=0 if screening else image_calls
+            reasoning_calls=(0 if _gemini_copy_ready(package) else 1)+1 if screening else image_calls+(0 if _gemini_copy_ready(package) else 1)+quality_calls
             if lifecycle_state == PackageState.BLOCKED_BUDGET.value:
-                image_calls = required_count
-                reasoning_calls = image_calls + (0 if _gemini_copy_ready(package) else 1)
                 try:
-                    preflight_gemini_workflow(image_calls=image_calls, reasoning_calls=reasoning_calls)
+                    preflight_gemini_workflow(image_calls=preflight_images, reasoning_calls=reasoning_calls)
                 except GeminiBudgetExceeded as exc:
                     budget_blocked_result = {
                         "status": PackageState.BLOCKED_BUDGET.value,
@@ -558,7 +637,11 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
                     "BUDGET_CAPACITY_RESTORED" if lifecycle_state == PackageState.BLOCKED_BUDGET.value else "PREPARATION_RETRY_SCHEDULED",
                     actor="dispatch_outbox.pregenerate",
                 )
+            elif lifecycle_state==PackageState.READY_TO_DISPATCH.value:
+                transition_package(data_dir,outbox_id,PackageState.PREPARATION_REQUIRED.value,'PRODUCTION_QUALITY_REVIEW_REQUIRED',actor='dispatch_outbox.pregenerate')
             transition_package(data_dir, outbox_id, PackageState.PREPARING.value, "PREPARATION_WINDOW_OPEN", actor="dispatch_outbox.pregenerate")
+            if os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic':
+                preflight_gemini_workflow(image_calls=preflight_images,reasoning_calls=reasoning_calls)
             existing_approval = package.get("product_image_approval")
             package = _hydrate_product_image_approval(package)
             if package.get("product_image_approval") != existing_approval and not update_ready_package(data_dir, outbox_id, package):
@@ -568,14 +651,41 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
                 package = _prepare_gemini_copy(package, data_dir)
                 if not copy_was_ready and not update_ready_package(data_dir, outbox_id, package):
                     return {"status": "DEFERRED", "outbox_id": outbox_id, "detail": "package_no_longer_ready"}
+            if quality.enabled():
+                reviewed=quality.review(package,data_dir,'plan')
+                if not update_ready_package(data_dir,outbox_id,package):return {'status':'DEFERRED','outbox_id':outbox_id}
+                if reviewed['status']!='PASS':
+                    if reviewed.get('review_complete') is False:raise RuntimeError('production_quality_review_incomplete')
+                    raise CandidateQualityError('plan',reviewed)
+            if candidates.automatic():
+                image_calls=0 if _gemini_assets_ready(package,int(package['gemini_generation'].get('required_image_count') or 0)) else int(package['gemini_generation'].get('required_image_count') or 0)
+                preflight_gemini_workflow(image_calls=image_calls,reasoning_calls=image_calls+int(not quality.current(package,data_dir,'release') or not _delivery_media_ready(package)))
             prepared = _prepare_gemini_assets(package, data_dir)
+            package = prepared
             if not update_ready_package(data_dir, outbox_id, prepared):
                 return {"status": "DEFERRED", "outbox_id": outbox_id, "detail": "package_no_longer_ready"}
+            if quality.enabled():
+                reviewed=quality.review(prepared,data_dir,'release')
+                if not update_ready_package(data_dir,outbox_id,prepared):return {'status':'DEFERRED','outbox_id':outbox_id}
+                if reviewed['status']!='PASS':
+                    if reviewed.get('review_complete') is False:raise RuntimeError('production_quality_review_incomplete')
+                    raise CandidateQualityError('release',reviewed)
             transition_package(data_dir, outbox_id, PackageState.AWAITING_QA.value, "CREATIVE_GENERATED", actor="dispatch_outbox.pregenerate")
             readiness = evaluate_outbox_readiness(data_dir, outbox_id, dispatch_enabled=True, actor="dispatch_outbox.pregenerate")
+            if candidates.automatic() and not readiness['ready'] and readiness['state']=='QA_REJECTED':
+                raise CandidateQualityError('readiness',readiness)
             transition_package(data_dir, outbox_id, readiness["state"], "READINESS_PASSED" if readiness["ready"] else readiness["reason_codes"][0], actor="dispatch_outbox.pregenerate", detail=readiness)
             return {"status": "PREGENERATED", "outbox_id": outbox_id}
         except Exception as exc:
+            if candidates.automatic():
+                copy_error=str(exc).removeprefix('on_image_text_author_failed:')
+                copy_failure=copy_error.startswith(('gemini_copy_schema_invalid:','gemini_copy_forbidden_label:','gemini_copy_caption_too_long','gemini_copy_visible_text_too_long:','gemini_copy_generic_headline','gemini_copy_clarity_rejected:','gemini_copy_claims_rejected:','invalid_typography_design_','typography_emphasis_must_be_words'))
+                if isinstance(exc,CandidateQualityError) or copy_failure:
+                    failure=exc if isinstance(exc,CandidateQualityError) else CandidateQualityError('copy',{'status':'BLOCKED','blockers':[{'criterion':'copy','issue':str(exc),'fix':'Develop a different complete post that meets the copy and factual requirements.'}]})
+                    if not update_ready_package(data_dir,outbox_id,package):return {'status':'DEFERRED','outbox_id':outbox_id}
+                    replacement=candidates.replace(package,failure)
+                    queued=replace_rejected_candidate(data_dir,outbox_id,package,replacement)
+                    return {'status':'REPLACEMENT_QUEUED' if queued else 'DEFERRED','outbox_id':outbox_id,'candidate_number':replacement['candidate_recovery']['candidate_number'],'reason_code':'NEW_POST_REPLACES_REJECTED_CANDIDATE'}
             error = f"{type(exc).__name__}:{exc}"
             if "budget" in error.lower() or "exhausted" in error.lower():
                 state, reason = PackageState.BLOCKED_BUDGET.value, "AI_BUDGET_EXHAUSTED"
@@ -667,7 +777,10 @@ def dispatch_due(
         if existing.get("state") == "CONFIRMED_SUCCESS":
             results[platform] = {"state": "CONFIRMED_SUCCESS", "external_id": existing.get("external_id"), "reused": True}
             continue
-        if existing.get("state") in {"AMBIGUOUS", "AUTH_ACTION_REQUIRED"} and not _delivery_enforced():
+        if existing.get("state") == "REQUEST_SENT":
+            complete_platform_transaction(data_dir,outbox_id=outbox_id,platform=platform,state="AMBIGUOUS",error="prior_request_has_no_confirmation")
+            existing = platform_transaction(data_dir,outbox_id,platform)
+        if existing.get("state") in {"AMBIGUOUS", "AUTH_ACTION_REQUIRED"}:
             ambiguous.append(f"{platform}:{existing.get('state')}")
             results[platform] = existing
             continue

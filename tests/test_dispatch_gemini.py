@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import sys
+import pytest
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -28,8 +29,18 @@ def _semantic_response(**overrides):
         "headline_not_dominant", "typography_looks_unstyled", "insufficient_text_contrast",
         "awkward_text_placement", "poor_kerning_or_line_breaks", "text_competes_with_subject",
         "single_scene_story_unclear", "superhero_action_missing", "civilian_rescue_missing", "character_inconsistent",
+        "visual_purpose_unclear", "product_role_unclear", "text_scene_mismatch",
     )
     return json.dumps({**{key: False for key in keys}, **overrides})
+
+
+def test_semantic_review_does_not_force_a_product_into_a_product_free_story():
+    from types import SimpleNamespace
+    response=SimpleNamespace(text=_semantic_response(product_missing=True))
+    client=SimpleNamespace(models=SimpleNamespace(generate_content=lambda **_:response))
+    types=SimpleNamespace(Part=SimpleNamespace(from_bytes=lambda **_:object()),GenerateContentConfig=lambda **_:None)
+    accepted,reasons=social_visuals._gemini_semantic_plate_quality(client,types,b'image','instagram',expected_headline='Check on your neighbors.',product_required=False)
+    assert accepted and reasons==[]
 
 
 def test_semantic_plate_review_allows_text_free_base_before_overlay():
@@ -127,6 +138,36 @@ def test_semantic_plate_review_rejects_blue_shadow_on_gemini_text():
     assert reasons == ["blue_text_shadow_or_glow"]
 
 
+@pytest.mark.parametrize("failure", ["visual_purpose_unclear", "product_role_unclear", "text_scene_mismatch"])
+def test_semantic_review_rejects_images_that_do_not_explain_the_post(failure):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def review(**kwargs):
+        calls.append(kwargs["contents"][0])
+        return SimpleNamespace(text=_semantic_response(**{failure: True}))
+
+    client = SimpleNamespace(models=SimpleNamespace(generate_content=review))
+    types = SimpleNamespace(
+        Part=SimpleNamespace(from_bytes=lambda **kwargs: kwargs),
+        GenerateContentConfig=lambda **kwargs: kwargs,
+    )
+    story = {"problem": "The room loses power.", "outcome": "The call continues.", "scene": "A worker connects the router to approved backup power."}
+    accepted, reasons = social_visuals._gemini_semantic_plate_quality(
+        client, types, b"image", "instagram", expected_text_lines=["Keep the call going"], visual_story=story,
+    )
+    assert accepted is False
+    assert reasons == [failure]
+    assert story["scene"] in calls[0]
+
+
+def test_copy_without_scene_message_contract_is_prepared_again():
+    package = _package(carousel=False)
+    package["gemini_copy"].pop("scene_message_version")
+    assert dispatch_outbox._gemini_copy_ready(package) is False
+
+
 def test_product_reference_approval_binds_source_bytes(tmp_path):
     source = tmp_path / "product.png"
     source.write_bytes(b"verified-product-image")
@@ -189,6 +230,7 @@ def _package(carousel: bool = True) -> dict:
             "provider": "gemini", "strict_provider": True, "fallback_allowed": False,
             "status": "COMPLETE", "model_output_sha256": "prepared-copy", "task": "copy_editing",
             "qa": {"clarity": "PASS"},
+            "scene_message_version": dispatch_outbox.SCENE_MESSAGE_VERSION,
         },
         "platform_posts": {
             platform: {"final_caption": "Ready caption", "destination_url": "https://example.test"}
@@ -234,11 +276,16 @@ def test_prepare_gemini_copy_authors_captions_and_visual_text(monkeypatch):
     prompt = prepared["gemini_generation"]["prompts"][0]
     direction = prompt["v5_direction"]
     assert direction["text_overlay"] == {"enabled": False}
-    assert direction["gemini_rendered_text"] == ["THE SMALL THING STALLED EVERYTHING."]
-    assert direction["gemini_typography_contract"]["blue_shadow_allowed"] is False
-    assert "no blue shadow" in direction["typography_render_instruction"]
-    assert "Render the supplied headline once only" in direction["typography_render_instruction"]
-    assert "THE SMALL THING STALLED EVERYTHING." not in prompt["gemini_image_prompt"]
+    assert direction["gemini_rendered_text"] == [
+        "THE SMALL THING STALLED EVERYTHING.", "POWER THE HANDOFF.", "TEST THE WHOLE ROUTINE.",
+    ]
+    assert "No blue shadow" in direction["typography_render_instruction"]
+    assert "no text will be added afterward" in direction["typography_render_instruction"]
+    assert all(line in prompt["gemini_image_prompt"] for line in direction["gemini_rendered_text"])
+    assert "for an editorial overlay" not in prompt["gemini_image_prompt"]
+    assert "VISUAL PURPOSE" in prompt["gemini_image_prompt"]
+    assert direction["visual_story"]["scene"] == prepared["generation_thought"]["image_scene"]
+    assert prepared["generation_thought"]["generation_contract"]["visible_text"] == prepared["generation_contract"]["visible_text"]
     assert "Do not render words" not in prompt["gemini_image_prompt"]
     assert prepared["gemini_copy"]["qa"] == {"schema": "PASS", "forbidden_labels": "PASS", "clarity": "PASS", "product_claims": "PASS"}
 
@@ -335,7 +382,7 @@ def test_prepare_gemini_assets_generates_every_carousel_slide_once(tmp_path, mon
     calls = []
 
     def generate(content, *, prompt_plan, output_path, platform):
-        Path(output_path).write_bytes(b"png")
+        Image.new('RGB',(1200,1200),'#42664f').save(output_path,'PNG')
         calls.append(prompt_plan["slide_index"])
         return {
             "render_engine": "gemini",
@@ -362,7 +409,7 @@ def test_prepare_gemini_assets_preserves_portrait_generation_contract(tmp_path, 
     package["gemini_generation"]["aspect_ratio"] = "9:16"
 
     def generate(content, *, prompt_plan, output_path, platform):
-        Path(output_path).write_bytes(b"png")
+        Image.new('RGB',(1080,1920),'#42664f').save(output_path,'PNG')
         platforms.append(platform)
         return {
             "render_engine": "gemini",
@@ -374,9 +421,10 @@ def test_prepare_gemini_assets_preserves_portrait_generation_contract(tmp_path, 
 
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr(dispatch_outbox, "generate_strict_gemini_image", generate)
-    dispatch_outbox._prepare_gemini_assets(package, str(tmp_path))
+    prepared=dispatch_outbox._prepare_gemini_assets(package, str(tmp_path))
 
     assert platforms == ["iis_reel_cover"]
+    assert prepared['platform_posts']['instagram']['media_type']=='STORY'
 
 
 def test_dispatch_never_generates_when_preparation_is_incomplete(monkeypatch):
@@ -678,6 +726,7 @@ def test_pregenerate_skips_completed_package_and_prepares_next(monkeypatch):
         "_gemini_assets_ready",
         lambda package, required_count: package is completed,
     )
+    monkeypatch.setattr(dispatch_outbox,'_delivery_media_ready',lambda package: package is completed)
     monkeypatch.setattr(dispatch_outbox, "transition_package", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatch_outbox, "evaluate_outbox_readiness", lambda *args, **kwargs: {"ready": True, "state": "READY_TO_DISPATCH", "primary_reason": "READY"})
     monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", lambda *args: prepared)

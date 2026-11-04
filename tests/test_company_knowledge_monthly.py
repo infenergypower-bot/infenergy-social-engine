@@ -94,7 +94,7 @@ def test_every_elite_prompt_contains_its_authored_scene_and_product_reference_ru
         product = _load_product_brief(str(ROOT / "data"), product_id) if product_id else None
         plan = _gemini_generation_plan(post, product)
         assert all(post["image_scene"] in prompt["gemini_image_prompt"] for prompt in plan["prompts"])
-        assert all(prompt["v5_direction"]["text_overlay"]["text"].startswith("Infenergy | ") for prompt in plan["prompts"])
+        assert all(prompt["v5_direction"]["gemini_rendered_text"] for prompt in plan["prompts"])
         if product:
             assert all(product["name"] in prompt["gemini_image_prompt"] for prompt in plan["prompts"])
             assert all("attached reference image" in prompt["gemini_image_prompt"] for prompt in plan["prompts"])
@@ -163,7 +163,7 @@ def test_month_builder_persists_ready_assets_and_is_idempotent(tmp_path, monkeyp
     assert prompts[-1]["v5_direction"]["semantic_role"] == "FINALE"
     assert prompts[-1]["v5_direction"]["official_logo_path"].endswith("infenergy_official_logo.png")
     assert all("Do not render any words" in prompt["gemini_image_prompt"] for prompt in prompts)
-    assert all(prompt["v5_direction"]["text_overlay"]["enabled"] for prompt in prompts)
+    assert all(prompt["v5_direction"]["text_overlay"] == {"enabled": False} for prompt in prompts)
 
     second = build_monthly_calendar(
         data_dir=str(tmp_path),
@@ -232,12 +232,13 @@ def test_120_day_entries_translate_to_runtime_generation_contracts():
     assert tuesday["entertainment_mode"] in comic_generation["prompts"][0]["gemini_image_prompt"]
     assert "square editorial" not in comic_generation["prompts"][0]["gemini_image_prompt"]
     assert "finished 1:1" not in comic_generation["prompts"][0]["gemini_image_prompt"]
-    assert comic_generation["prompts"][0]["v5_direction"]["text_overlay"]["comic_panel_text"] == list(tuesday["visible_text"].values())
+    assert comic_generation["prompts"][0]["v5_direction"]["gemini_rendered_text"] == [line for line in [comic["slides"][0]["headline"], comic["slides"][0]["supporting"]] if line]
+    assert story_generation["prompts"][0]["v5_direction"]["gemini_rendered_text"] == list(friday["visible_text"].values())
     assert story_generation["required_image_count"] == 1
     assert story_generation["aspect_ratio"] == "9:16"
     assert "Story page containing exactly THREE" in story_generation["prompts"][0]["gemini_image_prompt"]
     assert message_generation["aspect_ratio"] == "4:5"
-    assert sunday["exact_visible_text"][0] in message_generation["prompts"][0]["v5_direction"]["text_overlay"]["text"]
+    assert sunday["exact_visible_text"][0] in message_generation["prompts"][0]["v5_direction"]["gemini_rendered_text"]
 
 
 def test_product_story_page_renders_three_designed_panels(tmp_path, monkeypatch):
@@ -539,7 +540,7 @@ def test_month_builder_queues_a_duplicate_concept_when_the_requested_day_is_unpl
     assert daily_status(str(tmp_path), "2026-12-10")["ready"] == 1
 
 
-def test_all_monthly_gemini_prompts_are_unique_and_overlay_ready():
+def test_all_monthly_gemini_prompts_are_unique_and_contain_their_exact_text():
     from PIL import Image
 
     thoughts = _load_editorial_slate()["posts"]
@@ -555,6 +556,7 @@ def test_all_monthly_gemini_prompts_are_unique_and_overlay_ready():
     assert len(prompts) == 75
     assert len({prompt["prompt_sha256"] for prompt in prompts}) == 75
     for prompt in prompts:
-        image = Image.new("RGB", (1080, 1080), "#20313a")
-        _, overlay_error = _apply_v5_text_overlay(image, prompt["v5_direction"])
-        assert overlay_error == "", f"slide overlay failed: {prompt['prompt_sha256']} {overlay_error}"
+        direction = prompt["v5_direction"]
+        assert direction["text_overlay"] == {"enabled": False}
+        assert all(json.dumps(line, ensure_ascii=False)[1:-1] in prompt["gemini_image_prompt"] for line in direction["gemini_rendered_text"])
+        assert "for an editorial overlay" not in prompt["gemini_image_prompt"]

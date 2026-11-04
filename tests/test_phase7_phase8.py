@@ -13,6 +13,18 @@ from scripts.score_content import score_content  # noqa: E402
 
 
 class PhaseSevenEightTests(unittest.TestCase):
+    def test_claim_validator_blocks_unverified_solar_connection_and_runtime(self) -> None:
+        content={'product_name':'Aferiy 400W Solar Panel', 'product_url':'https://example.com/solar',
+            'fb_caption':'Plug the panel directly into your van battery port. This keeps the cabin lights running all evening.'}
+        errors=validate_generated_content(content)['errors']
+        self.assertIn('unverified_direct_solar_battery_connection',errors)
+        self.assertIn('unverified_charge_or_runtime_guarantee',errors)
+
+    def test_claim_validator_checks_product_free_scene_for_invented_hardware(self) -> None:
+        content={'fb_caption':'Check on your neighbors.',
+            'generation_thought':{'image_scene':'A neighbor connects an Infenergy power station to a laptop.'}}
+        self.assertIn('invented_infenergy_hardware',validate_generated_content(content)['errors'])
+
     def test_claim_validator_rejects_invented_wattage(self) -> None:
         content = {
             "product_name": "PowerFlex",

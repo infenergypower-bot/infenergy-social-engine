@@ -53,7 +53,7 @@ def build_mandate() -> SocialMandate:
         educational_role="primary — teach load matching, category basics, outage habits",
         community_role="build a preparedness-minded, calm community",
         authority_role="become the trusted place for power fit guidance",
-        entertainment_role="light — no clickbait; occasional surprise-facts",
+        entertainment_role="original edutainment, cinematic superhero stories, observational humor and community participation that earn shares, follows and return visits",
         conversation_role="answer real questions; invite scenario sharing",
     )
 

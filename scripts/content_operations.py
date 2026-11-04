@@ -65,6 +65,8 @@ def apply_growth_schedule_to_ready_inventory(data_dir: str, start_date: str | da
         ).fetchall()
         for row in rows:
             package = _decode(row["package_json"], {})
+            if package.get("production_approval"):
+                continue  # Preserve the exact owner-approved timestamp.
             platforms = configured_platforms(package)
             if not platforms:
                 continue
@@ -468,7 +470,6 @@ def evaluate_outbox_readiness(
 ) -> dict[str, Any]:
     connection = _connect(data_dir)
     try:
-        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT package_json, scheduled_at, lifecycle_state FROM content_outbox WHERE outbox_id=?",
             (outbox_id,),
@@ -486,12 +487,36 @@ def evaluate_outbox_readiness(
             package_id=outbox_id,
         )
         result = evaluation.to_dict()
+        if package.get("production_approval") or os.environ.get("EDITORIAL_APPROVAL_MODE","required") not in {"legacy", "automatic"}:
+            from publication_authorization import authorize
+            try:
+                for platform in configured_platforms(package):
+                    authorize(package, platform, data_dir=data_dir)
+                from production_workflow import Production
+                approved = Production(data_dir).get(package["production_approval"]["package_id"])
+                if approved["payload"]["scheduled_at"] != str(row["scheduled_at"]):
+                    raise ValueError("approved_schedule_changed")
+            except (KeyError, ValueError, OSError):
+                result = {**result, "ready": False, "state": PackageState.BLOCKED_CONFIGURATION.value,
+                          "reason_codes": ["EDITORIAL_APPROVAL_INVALID" if package.get("production_approval") else "EDITORIAL_APPROVAL_REQUIRED"]}
+        elif os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic':
+            from publication_authorization import authorize
+            try:
+                for platform in configured_platforms(package):
+                    authorize(package, platform, data_dir=data_dir)
+            except (KeyError, ValueError, OSError):
+                result = {**result, 'ready': False, 'state': PackageState.PREPARATION_REQUIRED.value,
+                          'reason_codes': ['AUTOMATIC_QUALITY_REVIEW_REQUIRED']}
         if persist:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT package_json, scheduled_at FROM content_outbox WHERE outbox_id=?", (outbox_id,)).fetchone()
+            if current["package_json"] != row["package_json"] or current["scheduled_at"] != row["scheduled_at"]:
+                raise ValueError("outbox_changed_during_readiness_check")
             connection.execute(
                 "UPDATE content_outbox SET readiness_json=?, reason_code=? WHERE outbox_id=?",
                 (_json(result), result["reason_codes"][0], outbox_id),
             )
-            if evaluation.ready:
+            if result["ready"]:
                 _reserve_asset(connection, outbox_id, package)
         connection.commit()
         return result
@@ -987,14 +1012,21 @@ def mark_ready(
     scheduled_at: str,
     decision_id: str,
     package: dict[str, Any],
+    outbox_id: str | None = None,
 ) -> str:
     package = attach_product_canon(data_dir, package)
-    outbox_id = uuid.uuid4().hex
+    outbox_id = outbox_id or uuid.uuid4().hex
     content_id = str(package.get("content_id") or package.get("post_id") or uuid.uuid4().hex)
     now = _now()
     connection = _connect(data_dir)
     try:
         connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute("SELECT package_json FROM content_outbox WHERE outbox_id=?", (outbox_id,)).fetchone()
+        if existing:
+            if _decode(existing["package_json"], {}) != package:
+                raise ValueError("outbox_idempotency_payload_conflict")
+            connection.commit()
+            return outbox_id
         session = connection.execute(
             "SELECT blackboard_json FROM council_sessions WHERE decision_id=?",
             (decision_id,),
@@ -1325,6 +1357,54 @@ def update_ready_package(data_dir: str, outbox_id: str, package: dict[str, Any])
         connection.close()
 
 
+def last_preparation_quality_rejection(data_dir: str, outbox_id: str, package: dict):
+    """Recover old recorded QA failures whose last_error was cleared by a budget pause."""
+    from social.post_candidates import CandidateQualityError
+    connection=_connect(data_dir)
+    try:
+        row=connection.execute("SELECT detail_json,created_at FROM package_transitions WHERE outbox_id=? AND destination_state='FAILED_PREPARATION' ORDER BY created_at DESC LIMIT 1",(outbox_id,)).fetchone()
+    finally:
+        connection.close()
+    if not row:return None
+    authored=(package.get('gemini_copy') or {}).get('generated_at_utc')
+    if authored and datetime.fromisoformat(authored)>datetime.fromisoformat(row['created_at']):return None
+    error=str(_decode(row['detail_json'],{}).get('error') or '')
+    if 'api_exception:' in error or not any(marker in error for marker in ('semantic_quality_rejected:','plate_quality_rejected:','gemini_artifact_qa_failed:','production_quality_plan_blocked','production_quality_release_blocked')):return None
+    return CandidateQualityError('previous_quality_review',{'status':'BLOCKED','blockers':[{'criterion':'quality','issue':error,'fix':'Replace this rejected post with a different concept and copy before making an image.'}]})
+
+
+def replace_rejected_candidate(data_dir: str, outbox_id: str, expected: dict, replacement: dict) -> bool:
+    """Atomically replace unpublished work without changing its slot or receipts."""
+    from publication_authorization import assert_not_scrapped
+    assert_not_scrapped(expected, data_dir)
+    connection = _connect(data_dir)
+    try:
+        connection.execute('BEGIN IMMEDIATE')
+        row = connection.execute('SELECT status,package_json,lifecycle_state FROM content_outbox WHERE outbox_id=?', (outbox_id,)).fetchone()
+        if not row or row['status'] != 'READY' or _decode(row['package_json'], {}) != expected:
+            return False
+        if row['lifecycle_state'] not in {'PREPARING','AWAITING_QA','QA_REJECTED','FAILED_PREPARATION','BLOCKED_BUDGET'}:
+            return False
+        if connection.execute("SELECT 1 FROM platform_transactions WHERE outbox_id=? AND state IN ('REQUEST_SENT','CONFIRMED_SUCCESS','AMBIGUOUS') LIMIT 1", (outbox_id,)).fetchone():
+            return False
+        if row['lifecycle_state'] in {'FAILED_PREPARATION','BLOCKED_BUDGET'}:
+            _record_transition(connection,outbox_id=outbox_id,destination='PREPARATION_REQUIRED',reason_code='NEW_POST_REPLACES_REJECTED_CANDIDATE',actor='post_candidates')
+            _record_transition(connection,outbox_id=outbox_id,destination='PREPARING',reason_code='REPLACEMENT_INITIALIZED',actor='post_candidates')
+        if row['lifecycle_state'] != 'QA_REJECTED':
+            if row['lifecycle_state'] != 'AWAITING_QA':
+                _record_transition(connection,outbox_id=outbox_id,destination='AWAITING_QA',reason_code='POST_CANDIDATE_REVIEWED',actor='post_candidates')
+            _record_transition(connection,outbox_id=outbox_id,destination='QA_REJECTED',reason_code='NEW_POST_CANDIDATE_QUEUED',actor='post_candidates',detail={'candidate_number':replacement['candidate_recovery']['candidate_number']})
+        connection.execute("UPDATE content_outbox SET package_json=?,readiness_json='{}',last_error=NULL,next_attempt_at=NULL WHERE outbox_id=?", (_json(replacement),outbox_id))
+        connection.execute("UPDATE asset_reservations SET reservation_state='RELEASED',updated_at=? WHERE outbox_id=? AND reservation_state='RESERVED'", (_now(),outbox_id))
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def begin_platform_transaction(
     data_dir: str,
     *,
@@ -1620,7 +1700,7 @@ def reconcile_stale_claims(
             protected = connection.execute(
                 """
                 SELECT 1 FROM platform_transactions
-                WHERE outbox_id=? AND state IN ('CONFIRMED_SUCCESS', 'AMBIGUOUS', 'AUTH_ACTION_REQUIRED') LIMIT 1
+                WHERE outbox_id=? AND state IN ('REQUEST_SENT', 'AMBIGUOUS', 'AUTH_ACTION_REQUIRED') LIMIT 1
                 """,
                 (row["outbox_id"],),
             ).fetchone()

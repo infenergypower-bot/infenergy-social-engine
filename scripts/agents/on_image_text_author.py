@@ -26,22 +26,45 @@ def _normalize_headline(value: str) -> str:
 
 
 def author(brief: dict[str, Any]) -> dict[str, Any]:
+    from social.production_quality import enabled as quality_enabled
     prompt = (
         "Create the complete final public copy and exact on-image message for one Infenergy social post. "
-        "Return one JSON object with exactly these keys: statement, expansion, action, image_scene, visible_text, platform_captions. "
+        "Return one JSON object with exactly these keys: statement, expansion, action, image_scene, visible_text, platform_captions, typography_design. "
         "visible_text must contain headline, infenergy_line, resolution_line. platform_captions must contain facebook, instagram, linkedin. "
+        "typography_design must contain personality, letterforms, hierarchy, emphasis (an array of up to two exact words or phrases from the approved visible text), placement, finish, and palette. Art-direct the lettering itself to fit this particular idea and scene. Choose distinctive letterforms, a meaningful type gesture and purposeful emphasis; a larger plain white all-caps heading is not sufficient. Keep one coherent display voice and one quieter supporting voice, readable on a phone. The style is generated inside the image, never applied afterward. "
         "Make each platform caption native, concise, non-repetitive, human, and specific to the consumer moment. Every caption must plainly name the real situation or problem, the action a person should take, the useful outcome, and Infenergy's concrete role. Each of the three platform captions must include the exact standalone word Infenergy. "
         "image_scene must name a specific person, place, activity, power interruption, and visible product use that resolves the moment. "
+        "Start with the reason for the post: one specific problem, the product's useful action, and a visible outcome. "
+        "The image must communicate that cause and effect without needing the caption to explain it. "
+        "Show the actual supported device connection and a visible sign of the useful result, not a product merely sitting nearby. "
+        "Do not imply compatibility, automatic backup, runtime, or output not established by the verified facts. "
         "Reject empty tabletop, isolated desk, packshot, generic workspace, and product-only compositions. The product must be actively used by a person in a credible scene. "
         "The visible headline must be five words or fewer and 36 characters or fewer. The other visible lines must be seven words or fewer and 48 characters or fewer. "
         "The headline must express the scene's specific tension, surprise, or human payoff. It must be memorable without becoming a slogan. "
+        "Write natural, direct wording that names the actual activity or consequence. Avoid cryptic hooks, vague metaphors, and generic motivation. "
+        "infenergy_line is a short supporting explanation of Infenergy's concrete role, not another slogan. "
+        "resolution_line names the visible useful outcome. All approved visible words will be generated inside the image, never added afterward. "
         "Reject generic phrases such as Stay Connected, Power Your Day, Power Anywhere, Stay Powered, Be Prepared, or Never Stop. "
         "Make the statement and captions earn the headline with a concrete observation and useful decision. A reader must understand the post without seeing the image. "
         "Avoid abstract shorthand and vague claims such as technical handoff, environmental variables, real-world rehearsal, protect the message, power the handoff, seamless, dependable, essential, freedom, confidence, or peace of mind. Replace them with the actual device, setting, failure, action, and result. "
         "Use plain punctuation and no hashtags in visible text. Never output POV:, FIELD TRUTH, internal taxonomy, unsupported specifications, prices, runtime, guarantees, testimonials, or invented product claims. "
         "Use only verified product facts in the brief. Do not output markdown or additional keys.\n\n"
+        "If the brief has no named product, create a product-free story about people taking a practical action. Never invent an Infenergy-branded power station, battery, or other hardware. Infenergy's role can be the useful advice in this post. "
+        "If a solar panel is named, never instruct or depict a direct connection to a vehicle battery or an invented van inlet. A live connection requires verified compatible charging equipment and a controller; when those are not specified, show planning or panel placement with the cable disconnected. "
+        "Never promise a full charge, all-evening runtime, or a specific battery percentage. Do not invent brand services, guides, or assistance programs absent from the brief. Use only the supported, conditional result.\n\n"
         f"FACTUAL BRIEF:\n{json.dumps(brief, ensure_ascii=True, sort_keys=True)}"
     )
+    if quality_enabled():
+        if brief.get('replacement_post'):
+            prompt+='\nREPLACEMENT TASK: Develop an entirely new post premise, situation, useful payoff, scene and all copy. Do not paraphrase the rejected post, preserve its hook, or repair its image. Use the factual brief and the rejection findings to choose a better idea within the same format and verified product boundaries.\n'
+        prompt=prompt.replace('Each of the three platform captions must include the exact standalone word Infenergy.',
+            'Use Infenergy naturally when it contributes meaning; do not force a brand mention into every caption.')
+        prompt=prompt.replace('image_scene must name a specific person, place, activity, power interruption, and visible product use that resolves the moment.',
+            'image_scene must name a specific person, place, action, and visible consequence. A product-free or non-outage scene is valid.')
+        prompt=prompt.replace("Start with the reason for the post: one specific problem, the product's useful action, and a visible outcome.",
+            'Start with the reason for the post: one specific human situation, a visible action, and a worthwhile payoff.')
+        prompt=prompt.replace('The product must be actively used by a person in a credible scene.',
+            'When a real product is specified, show its honest supported role; otherwise do not invent or insert one.')
     result = model_router.generate_json(
         "copy_editing",
         prompt,
@@ -85,8 +108,10 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
         for platform in ("facebook", "instagram", "linkedin")
         if "infenergy" not in re.sub(r"[^a-z0-9 ]+", " ", str(captions[platform]).lower()).split()
     ]
-    if missing_brand:
+    if missing_brand and not quality_enabled():
         raise RuntimeError(f"gemini_copy_infenergy_role_missing:{','.join(missing_brand)}")
+    from social.type_design import resolve
+    result['typography_design']=resolve(result.get('typography_design'),format_id=str(brief.get('format') or ''),lines=list(visible.values()))
     return result
 
 

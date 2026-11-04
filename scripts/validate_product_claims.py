@@ -43,6 +43,8 @@ def _collect_text(content: dict[str, Any]) -> str:
         str(content.get("ig_caption", "")),
         str(content.get("li_text", "")),
     ]
+    thought = content.get('generation_thought') or {}
+    parts.extend(str(thought.get(key) or '') for key in ['statement','expansion','action','image_scene'])
     return "\n".join(parts)
 
 
@@ -105,6 +107,12 @@ def validate_generated_content(content: dict[str, Any]) -> ValidationResult:
 
     text = _collect_text(content)
     product_name = str(content.get("product_name", "")).strip()
+    if not product_name and re.search(r'\binfenergy[ -]+(?:power station|battery|solar panel|generator)\b', text, re.I):
+        errors.append('invented_infenergy_hardware')
+    if 'solar' in product_name.lower() and re.search(r'\bdirect(?:ly)?\b[^.!?\n]{0,100}\b(?:van|vehicle|house|car|auxiliary)\b[^.!?\n]{0,45}\b(?:battery|port|inlet)\b',text,re.I):
+        errors.append('unverified_direct_solar_battery_connection')
+    if product_name and re.search(r'\b(?:keeps?|ensures?|guarantees?)\b[^.!?\n]{0,90}\b(?:all (?:day|night|evening)|fully (?:charged?|tops?)|tops? off)\b', text,re.I):
+        errors.append('unverified_charge_or_runtime_guarantee')
     product_metrics = {str(x).strip().lower() for x in (content.get("product_metrics", []) or []) if str(x).strip()}
     product_facts = str(content.get("product_facts", "") or "")
     verified_facts = content.get("product_verified_facts") or []
