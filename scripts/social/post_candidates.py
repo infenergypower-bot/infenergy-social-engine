@@ -63,6 +63,8 @@ def replace(package, failure):
                 'asset_sha256', 'asset_identity', 'perceptual_fingerprint', 'copy_generation_source',
                 'fb_caption', 'ig_caption', 'li_text', 'thought_statement', 'consumer_root', 'consumer_receipt', 'consumer_receipt_qa'):
         result.pop(key, None)
+    for key in ('validation_status','validation_errors','quality_warnings','publish_decision','consumer_copy_fidelity','consumer_story_contract'):
+        result.pop(key,None)
     result.update(concept={}, captions={}, image_text=[], assets=[], review={})
     for post in (result.get('platform_posts') or {}).values():
         for key in ('caption', 'final_caption', 'final_caption_qa', 'image_url', 'image_urls', 'media_type', 'asset_sha256'):

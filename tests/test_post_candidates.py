@@ -126,6 +126,20 @@ def test_incomplete_review_does_not_discard_a_post(pipeline,monkeypatch):
     assert not outbox.ready_package_for_preparation(root,'slot-one')['package'].get('candidate_recovery')
 
 
+def test_previous_image_rejection_survives_budget_pause_and_starts_a_new_post(pipeline):
+    root,_,calls,tick=pipeline
+    outbox.transition_package(root,'slot-one','PREPARING','TEST',actor='test')
+    outbox.transition_package(root,'slot-one','FAILED_PREPARATION','PREPARATION_FAILED',actor='test',detail={'error':'RuntimeError:gemini_generation_failed:semantic_quality_rejected:misspelled_text'})
+    outbox.transition_package(root,'slot-one','PREPARATION_REQUIRED','RETRY',actor='test')
+    outbox.transition_package(root,'slot-one','PREPARING','TEST',actor='test')
+    outbox.transition_package(root,'slot-one','BLOCKED_BUDGET','AI_BUDGET_EXHAUSTED',actor='test')
+    assert tick()['status']=='REPLACEMENT_QUEUED'
+    p=outbox.ready_package_for_preparation(root,'slot-one')['package']
+    assert p['candidate_recovery']['candidate_number']==2
+    assert 'misspelled_text' in p['candidate_recovery']['rejected'][0]['review']['blockers'][0]['issue']
+    assert calls['copy']==0 and calls['image']==0
+
+
 @pytest.mark.parametrize('state',['REQUEST_SENT','CONFIRMED_SUCCESS','AMBIGUOUS'])
 def test_atomic_replacement_preserves_posts_with_external_delivery_receipts(pipeline,state):
     root,_,_,_=pipeline

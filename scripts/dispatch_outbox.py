@@ -36,6 +36,7 @@ from content_operations import (
     update_claimed_package,
     update_ready_package,
     replace_rejected_candidate,
+    last_preparation_quality_rejection,
 )
 from publication_contract import PackageState
 from runtime_config import load_runtime_config
@@ -573,6 +574,12 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
             continue
         if candidates.automatic():
             recovery=package.get('candidate_recovery') or {}
+            if not recovery and row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED','BLOCKED_BUDGET'}:
+                failure=candidates.rejection(package) or last_preparation_quality_rejection(data_dir,str(row['outbox_id']),package)
+                if failure:
+                    replacement=candidates.replace(package,failure)
+                    queued=replace_rejected_candidate(data_dir,str(row['outbox_id']),package,replacement)
+                    return {'status':'REPLACEMENT_QUEUED' if queued else 'DEFERRED','outbox_id':row['outbox_id']}
             if recovery.get('status')=='REPLACEMENT_QUEUED' and recovery.get('next_candidate_at') and datetime.fromisoformat(recovery['next_candidate_at'])>now_utc:
                 continue
             if row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED'} and recovery.get('status')!='REPLACEMENT_QUEUED' and not targeted:

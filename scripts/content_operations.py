@@ -1357,6 +1357,22 @@ def update_ready_package(data_dir: str, outbox_id: str, package: dict[str, Any])
         connection.close()
 
 
+def last_preparation_quality_rejection(data_dir: str, outbox_id: str, package: dict):
+    """Recover old recorded QA failures whose last_error was cleared by a budget pause."""
+    from social.post_candidates import CandidateQualityError
+    connection=_connect(data_dir)
+    try:
+        row=connection.execute("SELECT detail_json,created_at FROM package_transitions WHERE outbox_id=? AND destination_state='FAILED_PREPARATION' ORDER BY created_at DESC LIMIT 1",(outbox_id,)).fetchone()
+    finally:
+        connection.close()
+    if not row:return None
+    authored=(package.get('gemini_copy') or {}).get('generated_at_utc')
+    if authored and datetime.fromisoformat(authored)>datetime.fromisoformat(row['created_at']):return None
+    error=str(_decode(row['detail_json'],{}).get('error') or '')
+    if 'api_exception:' in error or not any(marker in error for marker in ('semantic_quality_rejected:','plate_quality_rejected:','gemini_artifact_qa_failed:','production_quality_plan_blocked','production_quality_release_blocked')):return None
+    return CandidateQualityError('previous_quality_review',{'status':'BLOCKED','blockers':[{'criterion':'quality','issue':error,'fix':'Replace this rejected post with a different concept and copy before making an image.'}]})
+
+
 def replace_rejected_candidate(data_dir: str, outbox_id: str, expected: dict, replacement: dict) -> bool:
     """Atomically replace unpublished work without changing its slot or receipts."""
     from publication_authorization import assert_not_scrapped
@@ -1367,11 +1383,11 @@ def replace_rejected_candidate(data_dir: str, outbox_id: str, expected: dict, re
         row = connection.execute('SELECT status,package_json,lifecycle_state FROM content_outbox WHERE outbox_id=?', (outbox_id,)).fetchone()
         if not row or row['status'] != 'READY' or _decode(row['package_json'], {}) != expected:
             return False
-        if row['lifecycle_state'] not in {'PREPARING','AWAITING_QA','QA_REJECTED','FAILED_PREPARATION'}:
+        if row['lifecycle_state'] not in {'PREPARING','AWAITING_QA','QA_REJECTED','FAILED_PREPARATION','BLOCKED_BUDGET'}:
             return False
         if connection.execute("SELECT 1 FROM platform_transactions WHERE outbox_id=? AND state IN ('REQUEST_SENT','CONFIRMED_SUCCESS','AMBIGUOUS') LIMIT 1", (outbox_id,)).fetchone():
             return False
-        if row['lifecycle_state'] == 'FAILED_PREPARATION':
+        if row['lifecycle_state'] in {'FAILED_PREPARATION','BLOCKED_BUDGET'}:
             _record_transition(connection,outbox_id=outbox_id,destination='PREPARATION_REQUIRED',reason_code='NEW_POST_REPLACES_REJECTED_CANDIDATE',actor='post_candidates')
             _record_transition(connection,outbox_id=outbox_id,destination='PREPARING',reason_code='REPLACEMENT_INITIALIZED',actor='post_candidates')
         if row['lifecycle_state'] != 'QA_REJECTED':
