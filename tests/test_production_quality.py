@@ -135,3 +135,27 @@ def test_automatic_publish_boundary_requires_the_new_release_receipt(work,monkey
     monkeypatch.setenv('EDITORIAL_APPROVAL_MODE','automatic')
     with pytest.raises(ValueError,match='production_quality_review_required'):
         authorize(package,'facebook',data_dir=root)
+
+
+def test_instagram_delivery_encoding_preserves_source_and_requires_fresh_pixel_review(work,monkeypatch):
+    import hashlib
+    from dispatch_outbox import _prepare_delivery_media,_delivery_media_ready
+    package,root=work
+    source=Path(package['gemini_generation']['assets'][0]['local_path'])
+    Image.new('RGB',(1200,1200),'#42664f').save(source,'PNG')
+    source_hash=hashlib.sha256(source.read_bytes()).hexdigest()
+    package['routing']['platforms'].append('instagram')
+    package['platform_posts']['instagram']={'final_caption':'Check the shadow line before placing panels.'}
+    package['gemini_generation']['assets'][0].update(render_engine='gemini',public_url='https://example.com/media/finished.png')
+    monkeypatch.setenv('PUBLIC_BASE_URL','https://example.com')
+    package,root=approve((package,root))
+    assert not _delivery_media_ready(package)
+    _prepare_delivery_media(package,root)
+    assert _delivery_media_ready(package)
+    assert hashlib.sha256(source.read_bytes()).hexdigest()==source_hash
+    delivery=package['gemini_generation']['assets'][0]
+    with Image.open(delivery['local_path']) as image:
+        assert image.format=='JPEG' and image.mode=='RGB' and image.size==(1200,1200)
+    assert package['platform_posts']['instagram']['image_url'].endswith('-delivery.jpg')
+    assert quality.current(package,root,'plan')
+    assert not quality.current(package,root,'release')

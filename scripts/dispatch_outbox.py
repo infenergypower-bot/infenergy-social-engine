@@ -159,6 +159,59 @@ def _gemini_assets_ready(package: dict[str, Any], required_count: int) -> bool:
     )
 
 
+def _delivery_media_ready(package: dict[str, Any]) -> bool:
+    if 'instagram' not in configured_platforms(package):return True
+    if (package.get('gemini_generation') or {}).get('aspect_ratio')=='9:16' and ((package.get('platform_posts') or {}).get('instagram') or {}).get('media_type')!='STORY':return False
+    from PIL import Image
+    assets=(package.get('gemini_generation') or {}).get('assets') or []
+    if not assets:return False
+    try:
+        for asset in assets:
+            path=str(asset.get('local_path') or '')
+            with Image.open(path) as image:
+                if image.format!='JPEG' or image.mode!='RGB' or not path.lower().endswith(('.jpg','.jpeg')) or image.getexif().get(274,1)!=1:return False
+    except (OSError,ValueError):return False
+    return True
+
+
+def _prepare_delivery_media(package: dict[str, Any], data_dir: str) -> dict[str, Any]:
+    """Encode Instagram delivery files before the final pixel-bound review."""
+    if _delivery_media_ready(package):return package
+    from pathlib import Path
+    from PIL import Image,ImageOps
+    root=(Path(data_dir)/'public_media').resolve()
+    generation=package.get('gemini_generation') or {}
+    assets=[]
+    platform=strict_artifact_review_platform(package,'instagram')
+    for record in generation.get('assets') or []:
+        asset=dict(record);source=Path(asset['local_path']).resolve()
+        if source.parent!=root or not source.is_file():raise ValueError('delivery_asset_must_be_in_public_media')
+        with Image.open(source) as image:
+            if image.format!='JPEG' or image.mode!='RGB' or source.suffix.lower() not in {'.jpg','.jpeg'} or image.getexif().get(274,1)!=1:
+                target=source.with_name(source.stem+'-delivery.jpg')
+                temporary=target.with_suffix('.partial.jpg')
+                ImageOps.exif_transpose(image).convert('RGB').save(temporary,'JPEG',quality=95,subsampling=0,optimize=True)
+                os.replace(temporary,target)
+                asset.update(source_local_path=str(source),local_path=str(target),public_url=_public_media_url(target.name),delivery_encoding='JPEG',delivery_encoded_at_utc=datetime.now(timezone.utc).isoformat())
+        asset['sha256']=hashlib.sha256(Path(asset['local_path']).read_bytes()).hexdigest()
+        asset['review']=review_rendered_visual(asset['local_path'],platform)
+        if asset['review'].get('verdict')!='PASS':raise ValueError('delivery_encoding_artifact_review_failed')
+        assets.append(asset)
+    if not assets:raise ValueError('delivery_assets_required')
+    generation['assets']=assets
+    package['gemini_generation']=generation
+    package['carousel_assets']=assets if len(assets)>1 else []
+    package['primary_publish_image_url']=assets[0]['public_url']
+    for p in configured_platforms(package):
+        package.setdefault('generated_visuals',{})[p]=assets[0]['local_path']
+        package['generated_visuals'].setdefault('artifact_reviews',{})[p]=assets[0]['review']
+        post=package.setdefault('platform_posts',{}).setdefault(p,{'platform':p})
+        post['image_url']=assets[0]['public_url']
+        if p=='instagram' and generation.get('aspect_ratio')=='9:16':post['media_type']='STORY'
+        if len(assets)>1:post['image_urls']=[a['public_url'] for a in assets]
+    return package
+
+
 def _refresh_current_news_package(package: dict[str, Any]) -> dict[str, Any]:
     if package.get("weekly_role") != "current_news":
         return package
@@ -403,7 +456,7 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
     if required_count < 1 or len(prompts) != required_count:
         raise RuntimeError("gemini_prompt_count_mismatch")
     if _gemini_assets_ready(package, required_count):
-        return package
+        return _prepare_delivery_media(package,data_dir)
 
     public_dir = os.path.join(data_dir, "public_media")
     os.makedirs(public_dir, exist_ok=True)
@@ -480,7 +533,7 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
         "artifact_reviews": {platform: first["review"] for platform in PLATFORMS},
         "gemini_generated_at_utc": generation["generated_at_utc"],
     }
-    return package
+    return _prepare_delivery_media(package,data_dir)
 
 
 def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = None) -> dict[str, Any]:
@@ -516,13 +569,14 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
         required_count = int(generation.get("required_image_count") or 0)
         copy_plan = package.get("gemini_copy") if isinstance(package.get("gemini_copy"), dict) else {}
         images_ready=_gemini_copy_ready(package) and _gemini_assets_ready(package,required_count)
-        if generation.get("strict_provider") is not True or (images_ready and (not quality.enabled() or quality.ready(package,data_dir))):
+        media_ready=_delivery_media_ready(package)
+        if generation.get("strict_provider") is not True or (images_ready and media_ready and (not quality.enabled() or quality.ready(package,data_dir))):
             continue
         outbox_id = str(row["outbox_id"])
         try:
             lifecycle_state = row.get("lifecycle_state")
             image_calls=0 if images_ready else required_count
-            quality_calls=sum(not quality.current(package,data_dir,s) for s in ('plan','release')) if quality.enabled() else 0
+            quality_calls=int(not quality.current(package,data_dir,'plan'))+int(not quality.current(package,data_dir,'release') or not media_ready) if quality.enabled() else 0
             if lifecycle_state == PackageState.BLOCKED_BUDGET.value:
                 reasoning_calls = image_calls + (0 if _gemini_copy_ready(package) else 1) + quality_calls
                 try:

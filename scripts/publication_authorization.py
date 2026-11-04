@@ -29,7 +29,7 @@ def assert_not_scrapped(content: dict, data_dir: str | None = None) -> None:
 def authorize_automatic(content: dict, platform: str, data_dir: str | None = None) -> None:
     """Opt-in automation accepts only finished, current, quality-reviewed inventory."""
     from datetime import datetime, timezone
-    from dispatch_outbox import _gemini_assets_ready, _gemini_copy_ready
+    from dispatch_outbox import _gemini_assets_ready, _gemini_copy_ready, _delivery_media_ready
     from publication_contract import evaluate_publication_readiness
     from social.production_quality import require
     require(content,data_dir or os.environ.get('DATA_DIR',str(Path(__file__).resolve().parents[1]/'data')))
@@ -38,6 +38,7 @@ def authorize_automatic(content: dict, platform: str, data_dir: str | None = Non
         raise ValueError('automatic_publication_requires_strict_quality_pipeline')
     if not _gemini_copy_ready(content) or not _gemini_assets_ready(content, int(generation.get('required_image_count') or 0)):
         raise ValueError('automatic_publication_quality_checks_failed')
+    if not _delivery_media_ready(content):raise ValueError('instagram_delivery_requires_reviewed_jpeg')
     due = (content.get('platform_schedule') or {}).get(platform) or datetime.now(timezone.utc).isoformat()
     result = evaluate_publication_readiness(content, scheduled_at=due, platforms=[platform], dispatch_enabled=True)
     if not result.ready:

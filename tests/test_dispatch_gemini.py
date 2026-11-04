@@ -382,7 +382,7 @@ def test_prepare_gemini_assets_generates_every_carousel_slide_once(tmp_path, mon
     calls = []
 
     def generate(content, *, prompt_plan, output_path, platform):
-        Path(output_path).write_bytes(b"png")
+        Image.new('RGB',(1200,1200),'#42664f').save(output_path,'PNG')
         calls.append(prompt_plan["slide_index"])
         return {
             "render_engine": "gemini",
@@ -409,7 +409,7 @@ def test_prepare_gemini_assets_preserves_portrait_generation_contract(tmp_path, 
     package["gemini_generation"]["aspect_ratio"] = "9:16"
 
     def generate(content, *, prompt_plan, output_path, platform):
-        Path(output_path).write_bytes(b"png")
+        Image.new('RGB',(1080,1920),'#42664f').save(output_path,'PNG')
         platforms.append(platform)
         return {
             "render_engine": "gemini",
@@ -421,9 +421,10 @@ def test_prepare_gemini_assets_preserves_portrait_generation_contract(tmp_path, 
 
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setattr(dispatch_outbox, "generate_strict_gemini_image", generate)
-    dispatch_outbox._prepare_gemini_assets(package, str(tmp_path))
+    prepared=dispatch_outbox._prepare_gemini_assets(package, str(tmp_path))
 
     assert platforms == ["iis_reel_cover"]
+    assert prepared['platform_posts']['instagram']['media_type']=='STORY'
 
 
 def test_dispatch_never_generates_when_preparation_is_incomplete(monkeypatch):
@@ -725,6 +726,7 @@ def test_pregenerate_skips_completed_package_and_prepares_next(monkeypatch):
         "_gemini_assets_ready",
         lambda package, required_count: package is completed,
     )
+    monkeypatch.setattr(dispatch_outbox,'_delivery_media_ready',lambda package: package is completed)
     monkeypatch.setattr(dispatch_outbox, "transition_package", lambda *args, **kwargs: None)
     monkeypatch.setattr(dispatch_outbox, "evaluate_outbox_readiness", lambda *args, **kwargs: {"ready": True, "state": "READY_TO_DISPATCH", "primary_reason": "READY"})
     monkeypatch.setattr(dispatch_outbox, "_prepare_gemini_assets", lambda *args: prepared)
