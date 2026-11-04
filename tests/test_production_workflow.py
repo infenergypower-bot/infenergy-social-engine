@@ -155,6 +155,20 @@ def test_automatic_publishing_requires_current_complete_quality_gates(store, mon
         authorize(package,'instagram',data_dir=store.data_dir)
 
 
+def test_automatic_health_warns_when_budget_reset_misses_next_deadline(store, monkeypatch):
+    from production_health import snapshot
+    monkeypatch.setenv('EDITORIAL_APPROVAL_MODE','automatic')
+    monkeypatch.setenv('CONTENT_PREGENERATION_ENABLED','true')
+    current=datetime.now(timezone.utc)
+    monkeypatch.setattr('posting_schedule.inventory_snapshot',lambda *_:[{
+        'lifecycle_state':'BLOCKED_BUDGET','scheduled_at':(current+timedelta(hours=8)).isoformat()}])
+    monkeypatch.setattr('social.gemini_budget.budget_snapshot',lambda:{'next_reset_at_utc':(current+timedelta(hours=24)).isoformat()})
+    result=snapshot(store.data_dir)
+    assert not result['healthy']
+    assert 'AI_BUDGET_BLOCKS_SCHEDULED_POST' in result['issues']
+    assert result['budget_paused_posts']==1
+
+
 def test_paid_job_expiry_is_not_blindly_retried(store):
     p=store.create({'brief':'one idea','format':'humor'});q=store.queue(p['id'],'visual',p['revision'])
     job=store.claim('dead-worker',lease_seconds=-1)
