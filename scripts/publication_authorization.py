@@ -7,7 +7,46 @@ import os
 from pathlib import Path
 
 
+def assert_not_scrapped(content: dict, data_dir: str | None = None) -> None:
+    if content.get('scrapped') or str(content.get('title', '')).upper().startswith('[SCRAPPED]'):
+        raise ValueError('scrapped_content_cannot_publish')
+    identifier = (content.get('production_approval') or {}).get('package_id') or content.get('post_id')
+    if not identifier:
+        return
+    import sqlite3
+    from inventory_db import get_db_path
+    root = data_dir or os.environ.get('DATA_DIR', str(Path(__file__).resolve().parents[1] / 'data'))
+    path = Path(get_db_path(root))
+    if not path.is_file():
+        return
+    with sqlite3.connect(path, timeout=5) as connection:
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='production_packages'").fetchone():
+            row = connection.execute('SELECT state FROM production_packages WHERE id=?', (identifier,)).fetchone()
+            if row and row[0] == 'SCRAPPED':
+                raise ValueError('scrapped_content_cannot_publish')
+
+
+def authorize_automatic(content: dict, platform: str) -> None:
+    """Opt-in automation accepts only finished, current, quality-reviewed inventory."""
+    from datetime import datetime, timezone
+    from dispatch_outbox import _gemini_assets_ready, _gemini_copy_ready
+    from publication_contract import evaluate_publication_readiness
+    generation = content.get('gemini_generation') or {}
+    if not (content.get('gemini_copy') or {}).get('strict_provider') or not generation.get('strict_provider'):
+        raise ValueError('automatic_publication_requires_strict_quality_pipeline')
+    if not _gemini_copy_ready(content) or not _gemini_assets_ready(content, int(generation.get('required_image_count') or 0)):
+        raise ValueError('automatic_publication_quality_checks_failed')
+    due = (content.get('platform_schedule') or {}).get(platform) or datetime.now(timezone.utc).isoformat()
+    result = evaluate_publication_readiness(content, scheduled_at=due, platforms=[platform], dispatch_enabled=True)
+    if not result.ready:
+        raise ValueError('automatic_publication_not_ready:' + ','.join(result.reason_codes))
+
+
 def authorize(content: dict, platform: str, *, data_dir: str | None = None) -> None:
+    assert_not_scrapped(content, data_dir)
+    if os.environ.get('EDITORIAL_APPROVAL_MODE', 'required') == 'automatic' and not content.get('production_approval'):
+        authorize_automatic(content, platform)
+        return
     # Explicit migration switch for an existing autonomous installation. New
     # installations require revision-bound approval by default.
     if os.environ.get("EDITORIAL_APPROVAL_MODE", "required") == "legacy" and not content.get("production_approval"):

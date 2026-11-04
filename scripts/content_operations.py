@@ -487,7 +487,7 @@ def evaluate_outbox_readiness(
             package_id=outbox_id,
         )
         result = evaluation.to_dict()
-        if package.get("production_approval") or os.environ.get("EDITORIAL_APPROVAL_MODE","required")!="legacy":
+        if package.get("production_approval") or os.environ.get("EDITORIAL_APPROVAL_MODE","required") not in {"legacy", "automatic"}:
             from publication_authorization import authorize
             try:
                 for platform in configured_platforms(package):
@@ -499,6 +499,14 @@ def evaluate_outbox_readiness(
             except (KeyError, ValueError, OSError):
                 result = {**result, "ready": False, "state": PackageState.BLOCKED_CONFIGURATION.value,
                           "reason_codes": ["EDITORIAL_APPROVAL_INVALID" if package.get("production_approval") else "EDITORIAL_APPROVAL_REQUIRED"]}
+        elif os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic':
+            from publication_authorization import authorize
+            try:
+                for platform in configured_platforms(package):
+                    authorize(package, platform, data_dir=data_dir)
+            except (KeyError, ValueError, OSError):
+                result = {**result, 'ready': False, 'state': PackageState.PREPARATION_REQUIRED.value,
+                          'reason_codes': ['AUTOMATIC_QUALITY_REVIEW_REQUIRED']}
         if persist:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute("SELECT package_json, scheduled_at FROM content_outbox WHERE outbox_id=?", (outbox_id,)).fetchone()

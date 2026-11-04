@@ -233,6 +233,31 @@ def test_preparation_has_two_bounded_daily_windows(monkeypatch):
     assert len(preparation_jobs) == 2
 
 
+def test_automatic_preparation_and_delivery_have_recurring_clocks(monkeypatch):
+    monkeypatch.setenv('EDITORIAL_APPROVAL_MODE','automatic')
+    monkeypatch.setenv('CONTENT_DISPATCH_ENABLED','true')
+    monkeypatch.setenv('CONTENT_PREGENERATION_ENABLED','true')
+    worker.register_scheduled_jobs()
+    sweeps=[j for j in worker.schedule.jobs if j.job_func.func is worker._start_dispatch_thread and j.job_func.args==('due_sweep',)]
+    assert len(sweeps)==1 and sweeps[0].interval==1 and sweeps[0].unit=='minutes'
+    preparations=[j for j in worker.schedule.jobs if j.job_func.func is worker._start_pregeneration_thread]
+    assert any(j.interval==5 and j.unit=='minutes' for j in preparations)
+    assert not any(j.job_func.func is worker._start_factory_thread for j in worker.schedule.jobs)
+
+
+def test_slow_preparation_cannot_hold_up_delivery(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(worker,'RUN_LOCK',worker.threading.Lock())
+    monkeypatch.setattr(worker,'DISPATCH_LOCK',worker.threading.Lock())
+    monkeypatch.setattr(worker.subprocess,'run',lambda *a,**k:(calls.append(a) or SimpleNamespace(returncode=0,stdout='{"processed":0,"published":0}',stderr='')))
+    worker.RUN_LOCK.acquire()
+    try:
+        worker.dispatch_scheduled_slot('due_sweep')
+    finally:
+        worker.RUN_LOCK.release()
+    assert len(calls)==1
+
+
 def test_budget_blocked_product_run_is_durable_and_idempotent(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setattr(worker, "budget_snapshot", lambda: {

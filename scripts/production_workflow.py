@@ -163,6 +163,8 @@ class Production:
             row = c.execute("SELECT * FROM production_packages WHERE id=?", (identifier,)).fetchone()
             if not row or row["revision"] != int(revision):
                 raise Conflict("revision_conflict_reload_package")
+            if row['state'] == 'SCRAPPED':
+                raise Conflict('scrapped_package_cannot_be_revised')
             if row["outbox_id"] or row["state"] == "SCHEDULING":
                 raise Conflict("scheduled_package_requires_new_draft")
             if c.execute("SELECT 1 FROM production_jobs WHERE package_id=? AND state='RUNNING'", (identifier,)).fetchone():
@@ -186,6 +188,23 @@ class Production:
             c.execute("INSERT INTO production_revisions VALUES(?,?,?,?,?)", (identifier, int(revision)+1, json.dumps(payload), actor, now()))
             c.execute("UPDATE production_jobs SET state='SUPERSEDED' WHERE package_id=? AND state IN ('QUEUED','RETRY','WAITING_BUDGET')", (identifier,))
             self.event(c, identifier, "REVISED", {"fields": sorted(updates)}, actor)
+        return self.get(identifier)
+
+    def scrap(self, identifier, revision):
+        """Retain the record and receipts while preventing any further production."""
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT * FROM production_packages WHERE id=?', (identifier,)).fetchone()
+            if not row or row['revision'] != int(revision):
+                raise Conflict('revision_conflict_reload_package')
+            if row['outbox_id'] or row['state'] == 'SCHEDULING':
+                raise Conflict('scheduled_package_requires_delivery_hold_first')
+            if c.execute("SELECT 1 FROM production_jobs WHERE package_id=? AND state='RUNNING'", (identifier,)).fetchone():
+                raise Conflict('production_in_progress')
+            c.execute("UPDATE production_packages SET state='SCRAPPED',revision=revision+1,approval=NULL,updated_at=? WHERE id=?", (now(),identifier))
+            c.execute('INSERT INTO production_revisions VALUES(?,?,?,?,?)', (identifier,int(revision)+1,row['payload'],'owner',now()))
+            c.execute("UPDATE production_jobs SET state='SUPERSEDED',next_stages='[]' WHERE package_id=? AND state IN ('QUEUED','RETRY','WAITING_BUDGET')", (identifier,))
+            self.event(c, identifier, 'SCRAPPED', {'reason':'owner_rejected_content'})
         return self.get(identifier)
 
     def local_asset(self, relative_path: str) -> Path:
@@ -237,6 +256,7 @@ class Production:
 
     def checks(self, identifier):
         item = self.get(identifier); p = item["payload"]; errors = []; warnings = []
+        if item['state'] == 'SCRAPPED': errors.append('scrapped_package_cannot_publish')
         concept = p["concept"]
         for key in ["human_moment", "hook", "payoff", "visual_direction", "brain_movement", "heart_response"]:
             if not str(concept.get(key, "")).strip(): errors.append("concept_"+key+"_missing")
@@ -325,6 +345,7 @@ class Production:
             c.execute("BEGIN IMMEDIATE")
             row = c.execute("SELECT * FROM production_packages WHERE id=?", (identifier,)).fetchone()
             if not row or row["revision"] != int(revision): raise Conflict("revision_conflict_reload_package")
+            if row['state'] == 'SCRAPPED': raise Conflict('scrapped_package_cannot_be_queued')
             if row["outbox_id"]: raise Conflict("already_scheduled")
             p = json.loads(row["payload"])
             if p["rules"]["typography"] == "controlled" and stage not in {"inspect", "schedule"}:
@@ -438,6 +459,7 @@ class Production:
             m = json.loads(r.pop("metrics")); reach = m.get("reach")
             r["metrics"] = m; r["rates"] = {key+"_per_reach": m[key]/reach if reach and key in m else None for key in ["shares","saves","follows","comments"]}
         from content_operations import classify_backlog, publishing_metrics
+        from posting_schedule import inventory_snapshot
         from production_health import snapshot as health_snapshot
         connection_checks={}
         for event in events:
@@ -452,6 +474,7 @@ class Production:
                 "formats": FAMILIES, "publishing": publishing_metrics(self.data_dir),
                 "backlog": {k:len(v) for k,v in classify_backlog(self.data_dir).items()},
                 "runtime":runtime,"connection_checks":connection_checks,"operations_health":health_snapshot(self.data_dir),
+                "scheduled_inventory":inventory_snapshot(self.data_dir),
                 "dispatch_enabled":os.environ.get("CONTENT_DISPATCH_ENABLED","false").lower() in {"1","true","yes","on"},
                 "connections": {p: {"configured": bool(os.environ.get(k)), "verified": False} for p,k in [("gemini","GEMINI_API_KEY"),("meta","META_PAGE_ACCESS_TOKEN"),("studio","ENTERTAINMENT_STUDIO_TOKEN")]}}
 
@@ -462,6 +485,7 @@ class Production:
             c.execute("INSERT INTO production_examples VALUES(?,?,?,?,?,?)", (uuid.uuid4().hex, body["format"], body["verdict"], str(body["explanation"]), str(body["content"]), now()))
 
     def clone(self, identifier):
+        if self.get(identifier)['state'] == 'SCRAPPED': raise Conflict('scrapped_package_cannot_be_cloned')
         original=self.get(identifier)["payload"]
         overrides={k:original["rules"][k] for k in ["tone","typography","natural_response"]}
         if overrides["typography"] == "controlled": overrides["typography"] = "integrated"

@@ -16,7 +16,7 @@ def main():
     import json
     from production_backup import backup_before_migration
     data_dir=os.environ.get("DATA_DIR",str(ROOT/"data"))
-    backup=backup_before_migration(data_dir)
+    backup=backup_before_migration(data_dir, version='posting-schedule-v1')
     print(json.dumps({"event":"pre_migration_backup",**backup}),flush=True)
     import worker
     stop = threading.Event()

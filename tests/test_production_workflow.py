@@ -112,6 +112,49 @@ def test_only_one_worker_claims_job(store):
     assert sum(c is not None for c in claims)==1
 
 
+def test_scrapped_draft_cannot_reenter_production_even_in_automatic_mode(store, monkeypatch):
+    item=store.create({'brief':'Rejected owner concept','format':'humor'})
+    store.queue(item['id'],'draft',item['revision'])
+    scrapped=store.scrap(item['id'],item['revision'])
+    assert scrapped['state']=='SCRAPPED'
+    assert store.claim('worker') is None
+    for action in [lambda:store.queue(item['id'],'draft',scrapped['revision']),
+                   lambda:store.clone(item['id']),
+                   lambda:store.revise(item['id'],{'title':'Reuse'},scrapped['revision']),
+                   lambda:store.approve(item['id'],scrapped['revision'])]:
+        with pytest.raises(ValueError,match='scrapped'): action()
+    monkeypatch.setenv('EDITORIAL_APPROVAL_MODE','automatic')
+    with pytest.raises(ValueError,match='scrapped_content'):
+        authorize({'post_id':item['id']},'instagram',data_dir=store.data_dir)
+
+
+def test_automatic_publishing_requires_current_complete_quality_gates(store, monkeypatch):
+    import dispatch_outbox
+    from publication_contract import MANDATORY_COPY_GATES, MANDATORY_VISUAL_GATES
+    from social.scene_message import SCENE_MESSAGE_VERSION, SEMANTIC_QUALITY_VERSION
+    monkeypatch.setenv('EDITORIAL_APPROVAL_MODE','automatic')
+    with pytest.raises(ValueError,match='strict_quality_pipeline'):
+        authorize({'caption':'Unreviewed'},'instagram',data_dir=store.data_dir)
+    record=asset(store)
+    package={'gemini_copy':{'provider':'gemini','strict_provider':True,'status':'COMPLETE',
+        'model_output_sha256':'verified','scene_message_version':SCENE_MESSAGE_VERSION,
+        'qa':{**{k:{'status':'PASS'} for k in MANDATORY_COPY_GATES},'clarity':'PASS'}},
+        'gemini_generation':{'strict_provider':True,'provider':'gemini','status':'COMPLETE','required_image_count':1,
+            'assets':[{'local_path':str(store.local_asset(record['path'])),'public_url':'https://social.example.com/media/frame.jpg',
+                'render_engine':'gemini','generation':{'semantic_quality_gate_version':SEMANTIC_QUALITY_VERSION}}],
+            'qa':{k:{'status':'PASS'} for k in MANDATORY_VISUAL_GATES}},
+        'platform_posts':{'instagram':{'final_caption':'Practical, checked advice.','image_url':'https://social.example.com/media/frame.jpg'}}}
+    monkeypatch.setattr(dispatch_outbox,'review_rendered_visual',lambda *a:{'verdict':'PASS'})
+    authorize(package,'instagram',data_dir=store.data_dir)
+    package['gemini_generation']['qa']['TEXT_QA']['status']='FAIL'
+    with pytest.raises(ValueError,match='not_ready'):
+        authorize(package,'instagram',data_dir=store.data_dir)
+    package['gemini_generation']['qa']['TEXT_QA']['status']='PASS'
+    package['gemini_generation']['assets'][0]['generation']['semantic_quality_gate_version']='old'
+    with pytest.raises(ValueError,match='quality_checks_failed'):
+        authorize(package,'instagram',data_dir=store.data_dir)
+
+
 def test_paid_job_expiry_is_not_blindly_retried(store):
     p=store.create({'brief':'one idea','format':'humor'});q=store.queue(p['id'],'visual',p['revision'])
     job=store.claim('dead-worker',lease_seconds=-1)

@@ -474,6 +474,7 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
 
 
 def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = None) -> dict[str, Any]:
+    targeted = bool(outbox_id)
     lead_minutes = load_runtime_config().preparation_lead_time_minutes
     now_utc = datetime.now(timezone.utc)
     before_utc = (now_utc + timedelta(minutes=lead_minutes)).isoformat()
@@ -488,6 +489,13 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
     budget_blocked_result: dict[str, Any] | None = None
     for row in rows:
         package = row["package"]
+        from publication_authorization import assert_not_scrapped
+        try:
+            assert_not_scrapped(package, data_dir)
+        except ValueError:
+            continue
+        if os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic' and row.get('lifecycle_state') in {'FAILED_PREPARATION', 'QA_REJECTED'} and not targeted:
+            continue  # A non-budget failure needs inspection, not an automatic paid retry loop.
         if package.get("weekly_role") == "current_news":
             scheduled_at = datetime.fromisoformat(str(row["scheduled_at"]).replace("Z", "+00:00"))
             if scheduled_at > news_before_utc:

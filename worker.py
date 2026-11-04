@@ -32,6 +32,7 @@ from social_visuals import review_rendered_visual
 from runtime_config import load_runtime_config, validate_startup_config
 
 RUN_LOCK = threading.Lock()
+DISPATCH_LOCK = threading.Lock()
 RUN_START_LOCK = threading.Lock()
 DEFERRED_RUN_LOCK = threading.Lock()
 LAST_RUN = {
@@ -2982,7 +2983,7 @@ def run_content_factory() -> None:
 
 def dispatch_scheduled_slot(slot: str) -> None:
     """Publish due prepared content without generating or rewriting it."""
-    if not RUN_LOCK.acquire(blocking=False):
+    if not DISPATCH_LOCK.acquire(blocking=False):
         print(f"[DISPATCH] {slot} deferred because another content operation is active")
         return
     recovery_needed = False
@@ -3026,7 +3027,7 @@ def dispatch_scheduled_slot(slot: str) -> None:
         print(f"[DISPATCH] {slot} failed: {LAST_DISPATCH['error']}")
     finally:
         LAST_DISPATCH["finished_at_utc"] = _utc_now()
-        RUN_LOCK.release()
+        DISPATCH_LOCK.release()
     if recovery_needed:
         _start_factory_thread()
 
@@ -3094,19 +3095,22 @@ def run_delivery_watchdog() -> dict:
 def register_scheduled_jobs() -> None:
     schedule.clear()
     legacy_generation = os.environ.get("EDITORIAL_APPROVAL_MODE", "required") == "legacy"
+    automatic_preparation = os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic'
     if legacy_generation:
         schedule.every().minute.do(resume_deferred_run)
     if os.environ.get("CONTENT_DISPATCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
         schedule.every().day.at(morning_utc).do(_start_dispatch_thread, "morning")
         schedule.every().day.at(midday_utc).do(_start_dispatch_thread, "midday")
         schedule.every().day.at(evening_utc).do(_start_dispatch_thread, "evening")
-        schedule.every(5).minutes.do(_start_dispatch_thread, "due_sweep")
+        schedule.every().minute.do(_start_dispatch_thread, "due_sweep")
         schedule.every(10).minutes.do(run_delivery_watchdog)
-    if legacy_generation and _env_is_true("CONTENT_PREGENERATION_ENABLED", False):
+    if (legacy_generation or automatic_preparation) and _env_is_true("CONTENT_PREGENERATION_ENABLED", False):
         primary = str(os.environ.get("CONTENT_PREGENERATION_PRIMARY_UTC", "05:15")).strip()
         retry = str(os.environ.get("CONTENT_PREGENERATION_RETRY_UTC", "11:15")).strip()
         schedule.every().day.at(primary).do(_start_pregeneration_thread)
         schedule.every().day.at(retry).do(_start_pregeneration_thread)
+        if automatic_preparation:
+            schedule.every(5).minutes.do(_start_pregeneration_thread)
     autonomous_ai = legacy_generation and os.environ.get("AUTONOMOUS_AI_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if autonomous_ai:
         if os.environ.get("CONTENT_FACTORY_ENABLED", "false").lower() in {"1", "true", "yes", "on"}:
@@ -3162,8 +3166,11 @@ def main() -> None:
 
     if legacy_generation:
         resume_deferred_run(recover_stale=True)
-    if legacy_generation and _env_is_true("CONTENT_PREGENERATION_ENABLED", False) and _env_is_true("CONTENT_PREGENERATION_ON_STARTUP", False):
-        pregenerate_scheduled_content()
+    if (legacy_generation or os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic') and _env_is_true("CONTENT_PREGENERATION_ENABLED", False) and _env_is_true("CONTENT_PREGENERATION_ON_STARTUP", False):
+        if legacy_generation:
+            pregenerate_scheduled_content()
+        else:
+            _start_pregeneration_thread()
     if os.environ.get("CONTENT_DISPATCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}:
         run_delivery_watchdog()
         _start_dispatch_thread("startup_sweep")
@@ -3177,7 +3184,7 @@ def main() -> None:
 
     while True:
         schedule.run_pending()
-        time.sleep(30)
+        time.sleep(5)
 
 
 if __name__ == "__main__":

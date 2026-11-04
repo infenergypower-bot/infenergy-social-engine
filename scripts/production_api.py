@@ -37,6 +37,7 @@ def handle(method, path, payload, data_dir):
         if method=="POST" and route[2:]==["approve"]:return 200,{"package":store.approve(identifier,int(payload["revision"]))}
         if method=="POST" and route[2:]==["queue"]:return 202,store.queue(identifier,str(payload["stage"]),int(payload["revision"]))
         if method=="POST" and route[2:]==["clone"]:return 201,{"package":store.clone(identifier)}
+        if method=="POST" and route[2:]==["scrap"]:return 200,{"package":store.scrap(identifier,int(payload['revision']))}
         if method=="POST" and route[2:]==["estimate"]:return 200,store.estimate(identifier,payload)
         if method=="POST" and route[2:]==["observations"]:
             store.observe(identifier,payload);return 201,{"status":"recorded"}
