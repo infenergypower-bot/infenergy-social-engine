@@ -62,6 +62,7 @@ def resolve(format_id: str, *, objective: str = "audience_growth", overrides: di
         "product_rule": "A required product must causally serve the scene using supported capabilities. Otherwise product-free content is valid.",
         "character_rule": "Use approved identity/reference assets; no invented permanent canon or generic superhero substitution.",
         "image_message_rule": "Generate the exact approved wording and the image together. The scene must make its situation, action and useful payoff clear without relying on the caption. No text is added afterward.",
+        "lettering_design_rule": "Give the lettering its own scene-specific art direction: personality, distinctive letterforms, hierarchy, emphasis, placement, finish and restrained palette. Plain white all-caps text alone is not a design. Keep exact words and phone readability, and generate the typography with the artwork.",
         "legacy_conflicts_superseded": ["no_nonconverting_copy", "checkout_first", "light_entertainment_only", "universal_typography_mode"],
     }
     rules["digest"] = digest(rules)

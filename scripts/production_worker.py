@@ -40,6 +40,7 @@ def text_stage(store, job, payload):
         recent=[json.loads(r[0]).get("concept",{}) for r in c.execute("SELECT payload FROM production_packages WHERE id<>? ORDER BY updated_at DESC LIMIT 12",(job["package_id"],))]
     if job["stage"]=="concept":
         schema="Return JSON {human_moment,hook,payoff,visual_direction,brain_movement,heart_response,storyboard:[{action,dialogue,shot}],image_text:[string],novelty_reason}. Develop one worthwhile premise before writing copy. human_moment names the specific situation people recognize; payoff explains why they should care; visual_direction and each frame action show that relationship visibly. A viewer must understand the idea and its payoff from the image itself. If a product is shown, explain its supported role in the outcome and show a credible connection or action, not decorative placement. Do not force a power-outage or product scene onto product-free formats. Supply exactly one storyboard and one concise image_text string per format card; use an empty string when a frame needs no words. Use clear, natural language tied to the visible situation, not cryptic metaphors, generic motivation or empty power slogans. The exact approved words must be generated with the scene in one image request, never typeset afterward. Keep lettering readable at phone size without covering faces, hands or the important action. No permanent canon invention or unverified product capabilities."
+        schema+=' Also return typography_design:{personality,letterforms,hierarchy,emphasis:[exact words from image_text],placement,finish,palette}. Design the lettering as part of the idea: original expressive forms and a meaningful emphasis, not merely a larger white all-caps font. Keep the same type system across frames, with phone-readable contrast and no extra visible words.'
         if rules.get("panels"):
             schema+=" StoryPage exception: storyboard contains ONE page with panels:[{action,dialogue,speaker}] of exactly four panels. The first panel is the hero panel; subsequent panels progress top-to-bottom to an earned brand ending. Dialogue is at most 10 words per panel. image_text contains ONE string joining the exact panel dialogue in reading order. Generate each exact dialogue line inside its corresponding panel as part of the original artwork."
     else:
@@ -52,6 +53,10 @@ def text_stage(store, job, payload):
         if not all(isinstance(result.get(k),str) and result[k].strip() for k in ["human_moment","hook","payoff","visual_direction","brain_movement","heart_response"]): raise ValueError("concept_response_incomplete")
         text=result.pop("image_text",[])
         if not isinstance(text,list) or len(text)!=rules["cards"] or any(not isinstance(s,str) for s in text):raise ValueError("concept_requires_exact_text_for_each_frame")
+        if any(s.strip() for s in text) and rules['typography']!='none':
+            from social.type_design import resolve
+            result['typography_design']=resolve(result.get('typography_design'),format_id=rules['format_id'],lines=text)
+        else:result.pop('typography_design',None)
         if not isinstance(result.get("storyboard"),list) or len(result["storyboard"])!=rules["cards"]:raise ValueError("concept_storyboard_frame_count_mismatch")
         if rules.get("panels"):
             panels=result["storyboard"][0].get("panels") or []
@@ -106,6 +111,11 @@ def visual_stage(store, job, payload):
     if payload["rules"]["typography"]=="integrated":
         prompt+="Generate the scene and ONLY the exact declared text together in this single image request. Spell each supplied line exactly and render it once only. Compose clear, naturally contrasting typography with the scene, readable on a phone, without obscuring faces, hands, connections or the important action. Do not add slogans, labels, extra dialogue or gibberish. Do not reserve blank space for later typesetting; no text will be added afterward. "
         if payload["rules"]["format_id"]=="superhero_text_integration":prompt+="The declared words must physically interact with the character and scene with credible perspective and material interaction. "
+        if any(s.strip() for s in instructions['exact_image_text']):
+            from social.type_design import resolve,instruction as type_instruction
+            design=resolve(concept.get('typography_design'),format_id=payload['rules']['format_id'],lines=instructions['exact_image_text'])
+            instructions['typography_design']=design
+            prompt+=type_instruction(design)
     else: prompt+="No visible lettering. "
     prompt+=json.dumps(instructions,ensure_ascii=False)
     contents=[prompt]

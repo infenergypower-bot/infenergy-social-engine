@@ -19,11 +19,15 @@ def scene_message_direction(
     outcome: str,
     scene: str,
     comic: bool = False,
+    typography_design: dict | None = None,
+    format_id: str = '',
 ) -> dict[str, Any]:
     lines = [str(line).strip() for line in (headline, supporting, resolution if comic else "") if str(line).strip()]
     if not lines:
         raise ValueError("generated_image_message_missing")
     story = {"problem": problem, "outcome": outcome, "scene": scene}
+    from social.type_design import resolve,instruction as type_instruction
+    design=resolve(typography_design,format_id=format_id or ('story_page' if comic else ''),lines=lines)
     instruction = (
         "Generate the scene and all typography together in this single image request. "
         "Render only these exact approved lines, each once and spelled exactly: "
@@ -35,15 +39,16 @@ def scene_message_direction(
         )
         + "Compose the lettering with the scene from the outset. Use crisp, naturally contrasting letterforms, "
         "professional kerning, and deliberate line breaks without covering faces, hands, connections, or the key action. "
-        "No blue shadow, glow, outline, translucent text box, floating card, or generic poster layout. "
+        "No blue shadow, glow, translucent text box, floating card, or generic poster layout. "
         "Do not repeat the headline or invent any additional copy. Do not reserve space for a later overlay. "
-        "Return a finished image; no text will be added afterward."
+        "Return a finished image; no text will be added afterward. "+type_instruction(design)
     )
     return {
         "text_overlay": {"enabled": False},
         "gemini_rendered_text": lines,
         "scene_message_version": SCENE_MESSAGE_VERSION,
         "visual_story": story,
+        "typography_design": design,
         "typography_render_instruction": instruction,
     }
 

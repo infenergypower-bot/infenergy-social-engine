@@ -19,9 +19,15 @@ CRITERIA = {
     'text': 'Exact, correctly spelled image text',
     'craft': 'Credible anatomy, objects and connections',
     'mobile': 'Clear hierarchy and readability on a phone',
+    'lettering': 'Purposeful typography with its own character',
 }
 PLAN_CRITERIA = ('idea', 'meaning', 'copy', 'truth', 'brand')
-RELEASE_CRITERIA = tuple(CRITERIA)
+RELEASE_CRITERIA = tuple(k for k in CRITERIA if k!='lettering')
+
+
+def criteria_for(subject,stage):
+    base=PLAN_CRITERIA if stage=='plan' else RELEASE_CRITERIA
+    return base+('lettering',) if subject.get('typography_design') else base
 
 
 def enabled():
@@ -52,6 +58,12 @@ def packet(package, data_dir, *, include_assets=False):
         'image_directions':[(p.get('v5_direction') or {}).get('visual_story') or {} for p in prompts],
         'references':package.get('references') or [],
     }
+    designs=[(p.get('v5_direction') or {}).get('typography_design') for p in prompts if (p.get('v5_direction') or {}).get('typography_design')]
+    if not designs and (package.get('concept') or {}).get('typography_design'):designs=[package['concept']['typography_design']]
+    if not designs and package.get('rules') and package['rules'].get('typography')!='none' and any(str(s).strip() for s in package.get('image_text',[])):
+        from social.type_design import resolve
+        designs=[resolve(format_id=package['rules'].get('format_id',''),lines=package['image_text'])]
+    if designs:result['typography_design']=designs
     source=Path(__file__).resolve().parents[2]/'data/marketing/infenergy_company_knowledge.json'
     company=json.loads(source.read_text(encoding='utf-8'))
     result['brand_context']={k:company.get(k) for k in ('brand','values','product_truth_policy')}
@@ -100,7 +112,7 @@ def ready(package, data_dir):
 
 
 def decision(response, subject, stage, model):
-    criteria=PLAN_CRITERIA if stage=='plan' else RELEASE_CRITERIA
+    criteria=criteria_for(subject,stage)
     scores={}; evidence={}; blockers=[]
     if not isinstance(response,dict):response={}
     raw_scores=response.get('scores') or {}
@@ -138,7 +150,7 @@ def review(package, data_dir, stage):
     if current(package,data_dir,stage):return package['production_quality'][stage]
     from social import model_router
     subject=packet(package,data_dir,include_assets=stage=='release')
-    criteria=PLAN_CRITERIA if stage=='plan' else RELEASE_CRITERIA
+    criteria=criteria_for(subject,stage)
     model=model_router.route_for('final_review')
     prompt=(
         'You are the independent creative director and factual editor for Infenergy. Review the supplied work, not its intentions. '
@@ -153,6 +165,7 @@ def review(package, data_dir, stage):
         'An honest setup or compatibility-check scene is valid when no powered connection is established by the sources. '
         'For a finished image, read every declared line against the actual pixels and check phone-size hierarchy, anatomy, cables, physical connections, labels and distracting background lettering. '
         'Only exact_image_text declares required lettering; other copy in the packet is context, not additional wording to render. '
+        'When typography_design is supplied, assess lettering against that art direction. Require distinctive letterforms, a coherent type personality, purposeful hierarchy and emphasis, and placement that contributes to the idea. Plain white all-caps text or a color change alone is not sufficient. A restrained design can have character without novelty effects. Never trade exact spelling or phone readability for decoration. '
         'Flag every material issue even if another reviewer previously passed it. Do not reward the work merely for being on-brand. '
         f'Stage: {stage}. Criteria: {json.dumps({k:CRITERIA[k] for k in criteria})}. '
         f'Packet: {json.dumps(subject,ensure_ascii=False)}'
@@ -213,7 +226,9 @@ def dashboard(data_dir):
         records.append({'id':row['outbox_id'],'title':p.get('title') or (lines[0] if lines else None) or p.get('thought_statement') or p.get('topic') or 'Scheduled creative',
             'scheduled_at':row['scheduled_at'],'state':row['lifecycle_state'],'status':status,'fresh':fresh,
             'plan':assessments.get('plan'),'release':assessments.get('release'),
+            'typography_design':[(p.get('v5_direction') or {}).get('typography_design') for p in prompts if (p.get('v5_direction') or {}).get('typography_design')],
             'preview':'/media/'+Path(assets[0].get('local_path') or assets[0].get('path') or '').name if assets and isinstance(assets[0],dict) and (assets[0].get('local_path') or assets[0].get('path')) else None,
             'caption':((p.get('platform_posts') or {}).get('facebook') or {}).get('final_caption') or p.get('fb_caption') or ''})
-    return {'enabled':enabled(),'version':VERSION,'criteria':CRITERIA,'minimum_score':4,'exact_score_criteria':['truth','text'],
+    from social.type_design import STYLES
+    return {'enabled':enabled(),'version':VERSION,'criteria':CRITERIA,'typography_styles':STYLES,'minimum_score':4,'exact_score_criteria':['truth','text'],
         'records':records,'note':'AI editorial assessments can miss issues. A passing review binds the exact copy and finished pixels; it is not a guarantee of audience response.'}

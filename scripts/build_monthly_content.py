@@ -611,6 +611,8 @@ def _gemini_generation_plan(thought: dict[str, Any], product: dict[str, Any] | N
             outcome=str(thought["expansion"]),
             scene=image_scene,
             comic=is_story_page,
+            typography_design=contract.get('typography_design'),
+            format_id=str(contract.get('format') or thought.get('kind') or ''),
         )
         scene_prompt += "\n\n" + visual_story_instruction(message["visual_story"])
         scene_prompt += "\n\n" + message["typography_render_instruction"]

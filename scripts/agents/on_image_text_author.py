@@ -29,8 +29,9 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
     from social.production_quality import enabled as quality_enabled
     prompt = (
         "Create the complete final public copy and exact on-image message for one Infenergy social post. "
-        "Return one JSON object with exactly these keys: statement, expansion, action, image_scene, visible_text, platform_captions. "
+        "Return one JSON object with exactly these keys: statement, expansion, action, image_scene, visible_text, platform_captions, typography_design. "
         "visible_text must contain headline, infenergy_line, resolution_line. platform_captions must contain facebook, instagram, linkedin. "
+        "typography_design must contain personality, letterforms, hierarchy, emphasis (an array of up to two exact words or phrases from the approved visible text), placement, finish, and palette. Art-direct the lettering itself to fit this particular idea and scene. Choose distinctive letterforms, a meaningful type gesture and purposeful emphasis; a larger plain white all-caps heading is not sufficient. Keep one coherent display voice and one quieter supporting voice, readable on a phone. The style is generated inside the image, never applied afterward. "
         "Make each platform caption native, concise, non-repetitive, human, and specific to the consumer moment. Every caption must plainly name the real situation or problem, the action a person should take, the useful outcome, and Infenergy's concrete role. Each of the three platform captions must include the exact standalone word Infenergy. "
         "image_scene must name a specific person, place, activity, power interruption, and visible product use that resolves the moment. "
         "Start with the reason for the post: one specific problem, the product's useful action, and a visible outcome. "
@@ -107,6 +108,8 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
     ]
     if missing_brand and not quality_enabled():
         raise RuntimeError(f"gemini_copy_infenergy_role_missing:{','.join(missing_brand)}")
+    from social.type_design import resolve
+    result['typography_design']=resolve(result.get('typography_design'),format_id=str(brief.get('format') or ''),lines=list(visible.values()))
     return result
 
 

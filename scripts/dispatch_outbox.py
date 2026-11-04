@@ -386,6 +386,7 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
         "image_scene": str(result["image_scene"]).strip(),
     })
     contract["visible_text"] = {key: str(visible[key]).strip() for key in ("headline", "infenergy_line", "resolution_line")}
+    contract['typography_design']=result['typography_design']
     thought["generation_contract"] = contract
     package.update({
         "thought_statement": thought["statement"],
