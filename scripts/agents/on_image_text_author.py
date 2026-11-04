@@ -47,6 +47,9 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
         "Avoid abstract shorthand and vague claims such as technical handoff, environmental variables, real-world rehearsal, protect the message, power the handoff, seamless, dependable, essential, freedom, confidence, or peace of mind. Replace them with the actual device, setting, failure, action, and result. "
         "Use plain punctuation and no hashtags in visible text. Never output POV:, FIELD TRUTH, internal taxonomy, unsupported specifications, prices, runtime, guarantees, testimonials, or invented product claims. "
         "Use only verified product facts in the brief. Do not output markdown or additional keys.\n\n"
+        "If the brief has no named product, create a product-free story about people taking a practical action. Never invent an Infenergy-branded power station, battery, or other hardware. Infenergy's role can be the useful advice in this post. "
+        "If a solar panel is named, never instruct or depict a direct connection to a vehicle battery or an invented van inlet. A live connection requires verified compatible charging equipment and a controller; when those are not specified, show planning or panel placement with the cable disconnected. "
+        "Never promise a full charge, all-evening runtime, or a specific battery percentage. Do not invent brand services, guides, or assistance programs absent from the brief. Use only the supported, conditional result.\n\n"
         f"FACTUAL BRIEF:\n{json.dumps(brief, ensure_ascii=True, sort_keys=True)}"
     )
     result = model_router.generate_json(

@@ -221,7 +221,7 @@ def _package(carousel: bool = True) -> dict:
             "provider": "gemini", "strict_provider": True, "fallback_allowed": False,
             "status": "COMPLETE", "model_output_sha256": "prepared-copy", "task": "copy_editing",
             "qa": {"clarity": "PASS"},
-            "scene_message_version": 1,
+            "scene_message_version": dispatch_outbox.SCENE_MESSAGE_VERSION,
         },
         "platform_posts": {
             platform: {"final_caption": "Ready caption", "destination_url": "https://example.test"}

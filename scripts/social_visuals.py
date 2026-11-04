@@ -1375,11 +1375,11 @@ def _generate_gemini_full_creative(
                     )
                     if not accepted:
                         rejection_reason = f"semantic_quality_rejected:{','.join(semantic_reasons)}"
-                        if text_free_profile:
-                            rejected_path = f"{output_path}.rejected-{attempt + 1}.png"
-                            os.makedirs(os.path.dirname(rejected_path), exist_ok=True)
-                            generated.save(rejected_path, format="PNG", optimize=True)
-                            metadata.setdefault("rejected_artifacts", []).append(rejected_path)
+                        # Keep rejected pixels for diagnosis, separate from finished assets.
+                        rejected_path = f"{output_path}.rejected-{attempt + 1}.png"
+                        os.makedirs(os.path.dirname(rejected_path), exist_ok=True)
+                        generated.save(rejected_path, format="PNG", optimize=True)
+                        metadata.setdefault("rejected_artifacts", []).append(rejected_path)
                     else:
                         generated = _resize_cover(generated, spec["target"], image_module)
                         if generated.size != spec["target"]:

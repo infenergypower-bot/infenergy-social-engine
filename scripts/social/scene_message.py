@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 
-SCENE_MESSAGE_VERSION = 1
+SCENE_MESSAGE_VERSION = 2
 SEMANTIC_QUALITY_VERSION = 3
 
 

@@ -537,6 +537,9 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
                     actor="dispatch_outbox.pregenerate",
                 )
             transition_package(data_dir, outbox_id, PackageState.PREPARING.value, "PREPARATION_WINDOW_OPEN", actor="dispatch_outbox.pregenerate")
+            if os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic':
+                preflight_gemini_workflow(image_calls=required_count,
+                    reasoning_calls=required_count + (0 if _gemini_copy_ready(package) else 1))
             existing_approval = package.get("product_image_approval")
             package = _hydrate_product_image_approval(package)
             if package.get("product_image_approval") != existing_approval and not update_ready_package(data_dir, outbox_id, package):
