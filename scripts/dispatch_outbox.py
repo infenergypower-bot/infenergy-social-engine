@@ -667,7 +667,10 @@ def dispatch_due(
         if existing.get("state") == "CONFIRMED_SUCCESS":
             results[platform] = {"state": "CONFIRMED_SUCCESS", "external_id": existing.get("external_id"), "reused": True}
             continue
-        if existing.get("state") in {"AMBIGUOUS", "AUTH_ACTION_REQUIRED"} and not _delivery_enforced():
+        if existing.get("state") == "REQUEST_SENT":
+            complete_platform_transaction(data_dir,outbox_id=outbox_id,platform=platform,state="AMBIGUOUS",error="prior_request_has_no_confirmation")
+            existing = platform_transaction(data_dir,outbox_id,platform)
+        if existing.get("state") in {"AMBIGUOUS", "AUTH_ACTION_REQUIRED"}:
             ambiguous.append(f"{platform}:{existing.get('state')}")
             results[platform] = existing
             continue

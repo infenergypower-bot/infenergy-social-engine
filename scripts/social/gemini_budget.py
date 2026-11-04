@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import time
+import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from typing import Any
@@ -31,37 +31,35 @@ def _limits() -> tuple[int, int]:
 
 @contextmanager
 def _ledger_lock(path: str):
-    lock_path = f"{path}.lock"
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    descriptor = None
-    deadline = time.monotonic() + 5
-    while descriptor is None:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except (FileExistsError, PermissionError) as error:
-            if isinstance(error, PermissionError) and not os.path.exists(lock_path):
-                raise
-            if time.monotonic() >= deadline:
-                raise GeminiBudgetExceeded("Gemini budget ledger is busy; generation paused to prevent unmetered calls")
-            time.sleep(0.05)
+    lock_path = f"{path}.mutex.sqlite"
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    # A database lock is released by the OS even after SIGKILL. Old sentinel
+    # files are ignored; there is no unsafe stale-owner deletion race.
+    connection = sqlite3.connect(lock_path, timeout=5)
     try:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise GeminiBudgetExceeded("Gemini budget ledger is busy; generation paused to prevent unmetered calls") from exc
         yield
     finally:
-        os.close(descriptor)
-        try:
-            os.unlink(lock_path)
-        except FileNotFoundError:
-            pass
+        connection.rollback()
+        connection.close()
 
 
 def _load(path: str, day: str) -> dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8") as file:
             value = json.load(file)
-        if value.get("day") == day and isinstance(value.get("calls"), list):
+        if not isinstance(value,dict) or not isinstance(value.get("calls"),list) or not isinstance(value.get("day"),str):
+            raise ValueError("invalid_usage_ledger")
+        datetime.fromisoformat(value["day"])
+        if value["day"] == day:
             return value
-    except (OSError, ValueError, TypeError):
-        pass
+    except FileNotFoundError:
+        return {"day": day, "calls": []}
+    except (OSError, ValueError, TypeError) as exc:
+        raise GeminiBudgetExceeded("Gemini usage ledger cannot be read; generation paused until the ledger is repaired") from exc
     return {"day": day, "calls": []}
 
 

@@ -82,6 +82,8 @@ def _post_with_retry(url: str, data: dict, timeout: int = 30) -> requests.Respon
         last = resp
         if resp.ok:
             return resp
+        if resp.status_code >= 500 and (url.rstrip('/').endswith('/feed') or data.get("upload_phase") == "finish"):
+            raise requests.Timeout("publication_outcome_unknown_after_server_error")
 
         if resp.status_code not in (429, 500, 502, 503, 504):
             return resp
@@ -90,7 +92,6 @@ def _post_with_retry(url: str, data: dict, timeout: int = 30) -> requests.Respon
             time.sleep(wait_s)
 
     return last if last is not None else requests.Response()
-
 
 def _publish_feed_with_photo(
     *,
@@ -218,6 +219,9 @@ def _publish_reel(*, page_id: str, token: str, description: str, video_url: str)
     return {**payload, "id": str(payload.get("id") or video_id), "video_id": video_id, "media_type": "REEL"}
 
 
+from publication_authorization import guarded as _editorial_guard
+
+@_editorial_guard("facebook")
 def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
     facebook_package = (content.get("platform_posts") or {}).get("facebook") or {}
     message = str(facebook_package.get("final_caption") or content["fb_caption"])

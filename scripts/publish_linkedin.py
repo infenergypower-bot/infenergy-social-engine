@@ -268,6 +268,8 @@ def _post_with_retry(url: str, *, headers: dict, json_payload: dict, timeout: in
         last = resp
         if resp.ok:
             return resp
+        if resp.status_code >= 500 and url.rstrip('/').endswith('/ugcPosts'):
+            raise requests.Timeout("publication_outcome_unknown_after_server_error")
 
         status = resp.status_code
         body = _response_body(resp).lower()
@@ -281,7 +283,6 @@ def _post_with_retry(url: str, *, headers: dict, json_payload: dict, timeout: in
             time.sleep(wait_s)
 
     return last if last is not None else requests.Response()
-
 
 def _is_duplicate_error(resp: requests.Response) -> bool:
     if resp.status_code not in (400, 409, 422):
@@ -308,17 +309,21 @@ def delete(post_urn: str) -> dict:
     return {"id": urn, "success": True}
 
 
+from publication_authorization import guarded as _editorial_guard
+
+@_editorial_guard("linkedin")
 def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
-    text = f"{content['li_text']}\n\n{wp_link}"
+    text = content['li_text'] if content.get("production_approval") else f"{content['li_text']}\n\n{wp_link}"
     image_path = str((content.get("generated_visuals") or {}).get("linkedin", "")).strip()
     temp_download_path = ""
     temp_normalized_path = ""
+    carousel_normalized_paths = []
 
     if dry_run:
         print(f"[DRY RUN] LinkedIn: would post:\n{text[:150]}...\n")
         return {"id": "dry-run"}
 
-    author = _resolve_author_urn()
+    author = content["destination_accounts"]["linkedin"] if content.get("production_approval") else _resolve_author_urn()
     primary_publish_image_url = str(content.get("primary_publish_image_url", "")).strip()
 
     if not (image_path and os.path.exists(image_path)):
@@ -357,7 +362,7 @@ def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
         "shareMediaCategory": "NONE",
     }
     if image_path and os.path.exists(image_path):
-        normalized_path = _normalize_linkedin_image(image_path)
+        normalized_path = image_path if content.get("production_approval") else _normalize_linkedin_image(image_path)
         if normalized_path != image_path:
             temp_normalized_path = normalized_path
         asset = _upload_image_asset(author, normalized_path)
@@ -374,6 +379,15 @@ def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
                 }
             ],
         }
+
+    if content.get("production_approval") and len(content.get("carousel_assets") or []) > 1:
+        media = list(share_content.get("media") or [])
+        for image in content["carousel_assets"][1:]:
+            original = image["local_path"]
+            normalized = original  # Keep the exact approved pixels for this version.
+            if normalized != original: carousel_normalized_paths.append(normalized)
+            media.append({"status":"READY", "media":_upload_image_asset(author, normalized)})
+        share_content["media"] = media
 
     payload = {
         "author": author,
@@ -394,7 +408,7 @@ def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
             json_payload=payload,
             timeout=30,
         )
-        if _is_duplicate_error(resp):
+        if _is_duplicate_error(resp) and not content.get("production_approval"):
             # Retry once with a minimal variant to avoid duplicate-content rejection.
             variant = content.get("topic", "power update")
             payload["specificContent"]["com.linkedin.ugc.ShareContent"]["shareCommentary"]["text"] = (
@@ -407,7 +421,11 @@ def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
                 timeout=30,
             )
         _raise_with_body(resp)
-        post_id = resp.headers.get("x-restli-id", "posted")
+        post_id = resp.headers.get("x-restli-id", "")
+        if not post_id:
+            try: post_id = str(resp.json().get("id") or "")
+            except (ValueError, AttributeError): pass
+        if not post_id: raise requests.Timeout("publication_outcome_unknown_missing_receipt")
         print(f"[LinkedIn] Posted: {post_id}")
         return {
             "id": post_id,
@@ -416,6 +434,9 @@ def publish(content: dict, wp_link: str, dry_run: bool = False) -> dict:
             "asset": attached_asset,
         }
     finally:
+        for path in carousel_normalized_paths:
+            try: os.remove(path)
+            except OSError: pass
         if temp_normalized_path:
             try:
                 os.remove(temp_normalized_path)

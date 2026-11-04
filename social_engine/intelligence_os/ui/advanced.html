@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Infenergy Intelligence OS</title>
+  <link rel="stylesheet" href="/os/assets/styles.css?v=20">
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <form id="login-form" class="login-panel">
+      <div class="login-brand"><span class="brand-mark">I</span><div><strong>INFENERGY</strong><small>INTELLIGENCE OS</small></div></div>
+      <p class="eyebrow">OWNER ACCESS</p>
+      <h1>Social Command Center</h1>
+      <p class="login-copy">Enter the owner password to inspect and operate the social media engine.</p>
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required autofocus>
+      <p id="login-error" class="login-error" role="alert"></p>
+      <button type="submit">Open Command Center</button>
+    </form>
+  </section>
+  <div id="app-shell" class="shell" hidden>
+    <aside class="rail">
+      <div class="brand"><span class="brand-mark">I</span><div><strong>INFENERGY</strong><small>INTELLIGENCE OS</small></div></div>
+      <nav id="nav">
+        <button class="active master-nav" data-view="master">Master Mode</button>
+        <button data-view="command">Command</button>
+        <button data-view="creative">Creative Studio</button>
+        <button data-view="today">Today</button>
+        <button data-view="jobs">Jobs</button>
+        <button data-view="research">Research</button>
+        <button data-view="automations">Automations</button>
+        <button data-view="content-plan">120-Day Plan</button>
+        <button data-view="upcoming-content">Upcoming Content</button>
+        <button data-view="published-content">Published Content</button>
+        <button data-view="media-library">Media Library</button>
+        <button data-view="social">Social</button>
+        <button data-view="strategy">Strategy</button>
+        <button data-view="activity">Activity</button>
+        <button data-view="health">System Health</button>
+        <button data-view="permissions">Permissions</button>
+      </nav>
+      <label class="mobile-view-picker">
+        <span>Current view</span>
+        <select id="mobile-nav" aria-label="Select dashboard view">
+          <option value="master">Master Mode</option>
+          <option value="command">Command</option>
+          <option value="creative">Creative Studio</option>
+          <option value="today">Today</option>
+          <option value="jobs">Jobs</option>
+          <option value="research">Research</option>
+          <option value="automations">Automations</option>
+          <option value="content-plan">120-Day Plan</option>
+          <option value="upcoming-content">Upcoming Content</option>
+          <option value="published-content">Published Content</option>
+          <option value="media-library">Media Library</option>
+          <option value="social">Social</option>
+          <option value="strategy">Strategy</option>
+          <option value="activity">Activity</option>
+          <option value="health">System Health</option>
+          <option value="permissions">Permissions</option>
+        </select>
+      </label>
+      <div class="rail-footer"><span id="system-dot" class="dot"></span><span id="system-label">Connecting</span></div>
+    </aside>
+    <main>
+      <header>
+        <div><p class="eyebrow">MASTER OPERATING ENVIRONMENT</p><h1 id="view-title">Master Mode</h1></div>
+        <div class="header-actions"><button id="refresh" class="ghost">Refresh</button><button id="new-chat" class="ghost">New session</button><button id="logout" class="ghost">Log out</button></div>
+      </header>
+
+      <section id="master" class="view active">
+        <article class="master-hero panel">
+          <div><p class="eyebrow">ABSOLUTE CONTROL PLANE</p><h2>Every capability. Every operation. One governed workspace.</h2><p>Inspect and run the entire Intelligence OS directly. Production mutations retain exact-request approval, audit, and rollback protection.</p></div>
+          <span class="master-badge">MASTER MODE</span>
+        </article>
+        <div id="master-metrics" class="metric-grid"></div>
+        <article class="panel master-launchers">
+          <div class="panel-title"><div><p class="kicker">End-to-end launchers</p><h2>Master workflows</h2></div></div>
+          <div class="master-preset-grid">
+            <button data-master-preset="command"><strong>Autonomous command</strong><span>Give the master agent an outcome and let it operate.</span></button>
+            <button data-master-preset="creative"><strong>Creative → schedule</strong><span>Create, check, approve, and schedule in one flow.</span></button>
+            <button data-master-preset="health"><strong>Full health sweep</strong><span>Inspect providers, storage, channels, and safety mode.</span></button>
+            <button data-master-preset="readiness"><strong>Publication readiness</strong><span>Inspect calendar, outbox, failures, and due operations.</span></button>
+            <button data-master-preset="plan"><strong>120-day plan preview</strong><span>Review every text concept and catalog assignment.</span></button>
+            <button data-master-preset="dispatch"><strong>Dispatch preview</strong><span>Safely inspect what would publish before approval.</span></button>
+            <button data-master-preset="undo" class="danger"><strong>Undo last operation</strong><span>Rollback the newest reversible owner transaction.</span></button>
+          </div>
+        </article>
+        <div class="master-grid">
+          <article class="panel master-library">
+            <div class="panel-title"><div><p class="kicker">Complete function registry</p><h2>Capabilities</h2></div><span id="master-capability-count" class="badge">0</span></div>
+            <div class="master-filters"><input id="master-search" type="search" placeholder="Search every function"><select id="master-domain"><option value="">All domains</option></select></div>
+            <div id="master-capabilities" class="master-capabilities"></div>
+          </article>
+          <article class="panel master-executor">
+            <div id="master-empty" class="empty-state"><span>◆</span><strong>Select a capability</strong><p>Choose any registered function to inspect its contract and execute it.</p></div>
+            <form id="master-form" hidden>
+              <div class="master-capability-heading"><div><p id="master-domain-label" class="kicker"></p><h2 id="master-name"></h2><code id="master-id"></code></div><div id="master-flags"></div></div>
+              <p id="master-description" class="muted"></p>
+              <details class="master-schema"><summary>Input contract</summary><pre id="master-schema"></pre></details>
+              <label class="master-arguments"><span>Operation arguments · JSON</span><textarea id="master-arguments" rows="12" spellcheck="false">{}</textarea></label>
+              <div class="master-execute-bar"><label><input id="master-dry-run" type="checkbox"> Preview only — no mutation</label><button id="master-execute" type="submit">Execute capability →</button></div>
+              <div id="master-result" class="master-result"></div>
+            </form>
+          </article>
+        </div>
+        <article class="panel master-transactions-panel">
+          <div class="panel-title"><div><p class="kicker">Audited operating history</p><h2>Recent transactions</h2></div><button id="master-refresh" class="ghost">Refresh operations</button></div>
+          <div id="master-transactions"></div>
+        </article>
+      </section>
+
+      <section id="command" class="view">
+        <div class="command-grid">
+          <article class="conversation panel">
+            <div id="messages" class="messages">
+              <div class="message assistant"><span class="avatar">I</span><div><strong>Infenergy Intelligence</strong><p>Ready to inspect, plan, research, create, operate, and improve Infenergy. Mutations remain policy-governed.</p></div></div>
+            </div>
+            <form id="command-form" class="composer">
+              <textarea id="command-input" rows="3" placeholder="What should Infenergy know or accomplish?"></textarea>
+              <div><span>Shift + Enter for a new line</span><button type="submit">Run command <b>→</b></button></div>
+            </form>
+          </article>
+          <aside class="context-stack">
+            <article class="panel compact"><div class="panel-title"><h2>Needs attention</h2><span id="attention-count" class="badge">0</span></div><div id="attention-list" class="list empty">Nothing material is waiting.</div></article>
+            <article class="panel compact"><div class="panel-title"><h2>Recent jobs</h2><span id="job-count" class="badge">0</span></div><div id="job-list" class="list empty">No jobs recorded.</div></article>
+            <article class="panel compact"><div class="panel-title"><h2>Current authority</h2></div><div id="policy-summary" class="list empty">Loading policies…</div></article>
+          </aside>
+        </div>
+      </section>
+
+      <section id="creative" class="view">
+        <article class="panel post-composer-panel">
+          <div class="panel-title"><div><p class="kicker">Create one finished post</p><h2>Post Composer</h2></div><span id="composer-status" class="badge">New draft</span></div>
+          <form id="post-composer-form">
+            <div class="composer-controls">
+              <label><span>Post type</span><select id="composer-post-type"><optgroup label="Infenergy stories"><option value="infenergy_micro_mission">Infenergy Micro Mission</option><option value="infenergy_storypage">Infenergy StoryPage</option><option value="superhero_text_integration">Superhero with integrated text</option></optgroup><optgroup label="Editorial posts"><option value="current_event">Current event</option><option value="product_education" selected>Product education</option><option value="statement">Brand statement</option><option value="humor">Culture-led humor</option><option value="framework">Planning framework</option><option value="micro_story">Human micro-story</option><option value="explainer">Practical explainer</option><option value="drill">IRL drill</option><option value="myth">Myth-busting</option></optgroup></select></label>
+              <label><span>Write with</span><select id="composer-provider"><option value="gemini">Gemini</option><option value="gpt-5.6-sol">ChatGPT · gpt-5.6-sol</option></select></label>
+              <label><span>Visual format</span><select id="composer-format"><option value="single_image" selected>Single image</option><option value="carousel">Carousel</option></select></label>
+              <label id="composer-slide-field" hidden><span>Slides</span><input id="composer-slides" type="number" min="2" max="10" value="6"></label>
+            </div>
+            <label class="creative-field"><span>What should this post communicate?</span><textarea id="composer-brief" rows="5" placeholder="Describe the product, audience, message, offer, visual direction, and any facts that must be preserved." required></textarea></label>
+            <fieldset class="composer-platforms"><legend>Publish to</legend><label><input type="checkbox" value="facebook" checked> Facebook</label><label><input type="checkbox" value="instagram" checked> Instagram</label><label><input type="checkbox" value="linkedin" checked> LinkedIn</label></fieldset>
+            <div class="composer-primary-actions"><button id="composer-generate" class="creative-button" type="submit">Generate picture + copy</button><span>Images use Gemini. Copy uses the model selected above.</span></div>
+          </form>
+          <div id="composer-output" class="composer-output"></div>
+        </article>
+        <article class="panel post-type-launcher">
+          <div class="launcher-heading"><div><p class="kicker">Recommended post type</p><h2>Infenergy: Micro Missions</h2><p>Eight connected 4:5 story cards with generated, integrated visible copy.</p></div><span>8-card story</span></div>
+          <div class="launcher-actions" aria-label="Micro Mission workflow">
+            <button type="button" data-micro-mission="idea">Ideas</button>
+            <button type="button" data-micro-mission="regenerate">Regenerate</button>
+            <button type="button" data-micro-mission="edit">Edit story</button>
+            <button type="button" data-micro-mission="finalize">Finalize</button>
+            <button type="button" data-micro-mission="schedule">Schedule</button>
+            <button type="button" data-micro-mission="publish">Publish</button>
+            <button type="button" data-micro-mission="sample">Sample image</button>
+          </div>
+        </article>
+        <article class="panel generation-workspace">
+          <div class="generation-hero">
+            <div><p class="kicker">Autonomy by default. Control on demand.</p><h2>Generate Content</h2><p>Set only what matters to you. Every unspecified decision is delegated to Infenergy Intelligence.</p></div>
+            <button id="generation-toggle" class="creative-button" type="button">Generate Content</button>
+          </div>
+          <form id="generation-form" hidden>
+            <div class="generation-section">
+              <div><span class="section-label">How much content?</span><div id="generation-horizons" class="generation-segments"><button type="button" data-days="1">1 Day</button><button type="button" data-days="3">3 Days</button><button type="button" data-days="7">7 Days</button><button type="button" data-days="14">14 Days</button><button type="button" data-days="30" class="active">30 Days</button><button type="button" data-days="60">60 Days</button><button type="button" data-days="90">90 Days</button><button type="button" data-days="120">120 Days</button><button type="button" data-days="365">365 Days</button><button type="button" data-days="custom">Custom</button></div></div>
+              <div class="generation-dates"><label><span>Start</span><input id="generation-start" type="date"></label><label id="generation-custom-days" hidden><span>Days</span><input id="generation-days" type="number" min="1" max="365" value="30"></label></div>
+            </div>
+            <div class="generation-section"><span class="section-label">How much control do you want?</span><div id="generation-modes" class="generation-modes"><button type="button" data-mode="AI_DECIDE" class="active"><strong>Let AI Decide</strong><small>Infenergy Intelligence builds the strategy.</small></button><button type="button" data-mode="GUIDE_AI"><strong>Guide the AI</strong><small>Set a few preferences. Delegate the rest.</small></button><button type="button" data-mode="CUSTOMIZE"><strong>Customize Everything</strong><small>Open every control. Auto still remains available.</small></button></div></div>
+            <label class="generation-guidance"><span>Direction for the AI</span><textarea id="generation-guidance" rows="3" placeholder="More Infenergy. Two Micro Missions per week. Less product content. Make Instagram fun and keep LinkedIn professional."></textarea></label>
+            <details id="generation-controls-panel" class="generation-controls-panel"><summary>Optional controls <span>Every field defaults to Auto</span></summary><div id="generation-controls" class="generation-controls"></div></details>
+            <div class="generation-production"><label><span>Production window</span><select id="generation-production-window"><option value="7">Plan horizon, produce next 7 days</option><option value="30" selected>Plan horizon, produce next 30 days</option><option value="60">Plan horizon, produce next 60 days</option><option value="365">Fully produce requested horizon</option></select></label><label class="toggle-label"><input id="generation-rolling" type="checkbox"> Rolling production</label><button id="generation-submit" class="creative-button" type="submit">Build Content Program</button></div>
+          </form>
+        </article>
+        <section id="generation-result" class="generation-result"></section>
+        <div class="creative-grid">
+          <aside class="panel creative-library">
+            <div class="panel-title"><div><p class="kicker">Saved work</p><h2>Creative ideas</h2></div><button id="new-creative" class="creative-button secondary">+ New idea</button></div>
+            <div id="creative-list" class="creative-list"></div>
+          </aside>
+          <article class="panel creative-editor">
+            <div id="creative-empty" class="empty-state"><span>+</span><strong>Start a creative idea</strong><p>New ideas save immediately and continue autosaving as they are edited.</p></div>
+            <form id="creative-form" hidden>
+              <div class="creative-heading">
+                <div><p class="kicker">Creative title</p><input id="creative-title" aria-label="Creative title" maxlength="160"></div>
+                <span id="creative-save-state" class="save-state">Saved</span>
+              </div>
+              <label class="creative-field"><span>Idea or complete creative brief</span><textarea id="creative-idea" rows="6" placeholder="Describe the exact story, visual direction, copy, offer, and closing line..."></textarea></label>
+              <div class="creative-options">
+                <label><span>Slides</span><input id="creative-slides" type="number" min="2" max="10" value="6"></label>
+                <label><span>Primary format</span><select id="creative-platform"><option value="instagram_feed">Instagram 4:5</option><option value="facebook_feed">Facebook feed</option><option value="linkedin_feed">LinkedIn feed</option></select></label>
+                <fieldset><legend>Publish to</legend><label><input class="creative-channel" type="checkbox" value="facebook" checked> Facebook</label><label><input class="creative-channel" type="checkbox" value="instagram" checked> Instagram</label><label><input class="creative-channel" type="checkbox" value="linkedin"> LinkedIn</label></fieldset>
+              </div>
+              <div class="creative-schedule">
+                <label><span>Date</span><input id="creative-date" type="date"></label>
+                <label><span>Time</span><input id="creative-time" type="time" value="12:30"></label>
+                <label><span>Slot</span><select id="creative-slot"><option value="morning">Morning</option><option value="midday" selected>Midday</option><option value="evening">Evening</option></select></label>
+                <button id="creative-run" type="button" class="creative-button">Run checks, approve & schedule</button>
+              </div>
+              <div id="creative-result" class="creative-result"></div>
+              <div id="creative-preview" class="creative-preview"></div>
+            </form>
+          </article>
+        </div>
+      </section>
+
+      <section id="today" class="view"><div class="metric-grid" id="today-metrics"></div><article class="panel"><div class="panel-title"><h2>What matters today</h2></div><div id="today-content" class="cards"></div></article></section>
+      <section id="jobs" class="view"><article class="panel"><div class="panel-title job-toolbar"><div><h2>Execution fabric</h2><p class="muted">Search completed and active jobs, then open persisted deliverables.</p></div><div class="job-actions"><input id="job-search" type="search" placeholder="Search job ID, objective, or status" aria-label="Search jobs"><button class="ghost" data-action="plan120">Open 120-day plan</button></div></div><div id="jobs-table" class="table"></div></article></section>
+      <section id="research" class="view"><article class="panel"><div class="panel-title"><h2>Intelligence Library</h2></div><p class="muted">Current findings retain source identity, credibility, freshness, expiration, and limitations.</p><div id="research-content" class="cards"></div></article></section>
+      <section id="automations" class="view"><article class="panel"><div class="panel-title"><h2>Automations and watches</h2></div><div id="automations-content" class="cards"></div></article><article class="panel"><div class="panel-title"><h2>Recent automation runs</h2></div><div id="automation-runs" class="table"></div></article></section>
+      <section id="content-plan" class="view">
+        <article class="plan-hero panel">
+          <div><p id="plan-date-range" class="eyebrow">120-DAY ROLLING HORIZON</p><h2>Modern personal energy, built around the lives people actually want.</h2><p class="plan-deck">Audience worlds, identity shifts, culture, entertainment, and product fit. The consumer is the hero.</p></div>
+          <div class="plan-safety"><b id="plan-image-count">0 images</b><span>Text concepts only</span></div>
+        </article>
+        <div id="plan-metrics" class="metric-grid plan-metrics"></div>
+        <article class="panel plan-controls">
+          <label><span>Horizon</span><select id="plan-horizon"><option value="">All horizons</option></select></label>
+          <label><span>Audience</span><select id="plan-audience"><option value="">All audiences</option></select></label>
+          <label><span>Series</span><select id="plan-series"><option value="">All series</option></select></label>
+          <label class="plan-search"><span>Find an idea or product</span><input id="plan-search" type="search" placeholder="Communication, solar, PowerCharge…"></label>
+          <button id="plan-reset" class="ghost" type="button">Reset</button>
+        </article>
+        <div id="plan-weeks" class="plan-weeks"></div>
+      </section>
+      <section id="upcoming-content" class="view content-operations-view">
+        <div id="content-operations-metrics" class="metric-grid"></div>
+        <article class="panel content-operations-panel">
+          <div class="panel-title"><div><p class="kicker">Today through the next 30 days</p><h2>Upcoming content inventory</h2></div><span id="upcoming-window" class="badge"></span></div>
+          <div class="content-filters" data-content-filters><input type="search" data-content-filter="query" placeholder="Search copy, product, ID, or date" aria-label="Search upcoming content"><select data-content-filter="platform" aria-label="Filter by platform"><option value="">All platforms</option></select><select data-content-filter="status" aria-label="Filter by status"><option value="">All statuses</option></select><select data-content-filter="content_type" aria-label="Filter by content type"><option value="">All content types</option></select><button type="button" class="ghost" data-content-reset>Reset</button></div>
+          <div id="upcoming-content-list" class="content-records"></div>
+        </article>
+      </section>
+      <section id="published-content" class="view content-operations-view">
+        <article class="panel content-operations-panel">
+          <div class="panel-title"><div><p class="kicker">Confirmed platform receipts only</p><h2>Published content history</h2></div><span id="published-window" class="badge"></span></div>
+          <div class="content-filters" data-content-filters><input type="search" data-content-filter="query" placeholder="Search copy, external ID, product, or date" aria-label="Search published content"><select data-content-filter="platform" aria-label="Filter by platform"><option value="">All platforms</option></select><select data-content-filter="status" aria-label="Filter by status"><option value="">All statuses</option></select><select data-content-filter="content_type" aria-label="Filter by content type"><option value="">All content types</option></select><button type="button" class="ghost" data-content-reset>Reset</button></div>
+          <div id="published-content-list" class="content-records"></div>
+        </article>
+      </section>
+      <section id="media-library" class="view content-operations-view">
+        <article class="panel content-operations-panel"><div class="panel-title"><div><p class="kicker">Deduplicated production assets</p><h2>Media Library</h2></div><span id="media-count" class="badge">0 assets</span></div><div id="media-library-grid" class="media-library-grid"></div></article>
+      </section>
+      <section id="social" class="view">
+        <article class="panel"><div class="panel-title"><h2>Social operations</h2></div><div id="tiktok-connection"></div><div id="social-content" class="cards"></div></article>
+        <article class="panel social-calendar-panel">
+          <div class="calendar-toolbar"><div><p class="kicker">Persisted publishing plan</p><h2 id="calendar-title">Content calendar</h2></div><div class="calendar-actions"><button class="ghost" data-calendar-move="-1" aria-label="Previous month">←</button><button class="ghost" data-calendar-today>Today</button><button class="ghost" data-calendar-move="1" aria-label="Next month">→</button></div></div>
+          <div id="social-calendar" class="social-calendar"></div>
+        </article>
+      </section>
+      <section id="strategy" class="view"><article class="panel"><div class="panel-title"><h2>Goals and strategy</h2></div><div id="strategy-content" class="cards"></div></article></section>
+      <section id="activity" class="view"><article class="panel"><div class="panel-title"><h2>Auditable activity</h2></div><div id="activity-table" class="table"></div></article></section>
+      <section id="health" class="view"><article class="panel"><div class="panel-title"><h2>Provider and system health</h2></div><div id="health-content" class="cards"></div></article></section>
+      <section id="permissions" class="view"><article class="panel"><div class="panel-title"><h2>Owner control</h2></div><div id="permissions-content" class="cards"></div></article></section>
+    </main>
+  </div>
+  <dialog id="content-inspector" class="content-inspector"><div id="content-inspector-body"></div><form method="dialog"><button class="ghost">Close</button></form></dialog>
+  <div id="toast" class="toast"></div>
+  <script src="/os/assets/app.js?v=29"></script>
+</body>
+</html>

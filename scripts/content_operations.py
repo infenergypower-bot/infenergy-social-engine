@@ -65,6 +65,8 @@ def apply_growth_schedule_to_ready_inventory(data_dir: str, start_date: str | da
         ).fetchall()
         for row in rows:
             package = _decode(row["package_json"], {})
+            if package.get("production_approval"):
+                continue  # Preserve the exact owner-approved timestamp.
             platforms = configured_platforms(package)
             if not platforms:
                 continue
@@ -468,7 +470,6 @@ def evaluate_outbox_readiness(
 ) -> dict[str, Any]:
     connection = _connect(data_dir)
     try:
-        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT package_json, scheduled_at, lifecycle_state FROM content_outbox WHERE outbox_id=?",
             (outbox_id,),
@@ -486,12 +487,28 @@ def evaluate_outbox_readiness(
             package_id=outbox_id,
         )
         result = evaluation.to_dict()
+        if package.get("production_approval") or os.environ.get("EDITORIAL_APPROVAL_MODE","required")!="legacy":
+            from publication_authorization import authorize
+            try:
+                for platform in configured_platforms(package):
+                    authorize(package, platform, data_dir=data_dir)
+                from production_workflow import Production
+                approved = Production(data_dir).get(package["production_approval"]["package_id"])
+                if approved["payload"]["scheduled_at"] != str(row["scheduled_at"]):
+                    raise ValueError("approved_schedule_changed")
+            except (KeyError, ValueError, OSError):
+                result = {**result, "ready": False, "state": PackageState.BLOCKED_CONFIGURATION.value,
+                          "reason_codes": ["EDITORIAL_APPROVAL_INVALID" if package.get("production_approval") else "EDITORIAL_APPROVAL_REQUIRED"]}
         if persist:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute("SELECT package_json, scheduled_at FROM content_outbox WHERE outbox_id=?", (outbox_id,)).fetchone()
+            if current["package_json"] != row["package_json"] or current["scheduled_at"] != row["scheduled_at"]:
+                raise ValueError("outbox_changed_during_readiness_check")
             connection.execute(
                 "UPDATE content_outbox SET readiness_json=?, reason_code=? WHERE outbox_id=?",
                 (_json(result), result["reason_codes"][0], outbox_id),
             )
-            if evaluation.ready:
+            if result["ready"]:
                 _reserve_asset(connection, outbox_id, package)
         connection.commit()
         return result
@@ -987,14 +1004,21 @@ def mark_ready(
     scheduled_at: str,
     decision_id: str,
     package: dict[str, Any],
+    outbox_id: str | None = None,
 ) -> str:
     package = attach_product_canon(data_dir, package)
-    outbox_id = uuid.uuid4().hex
+    outbox_id = outbox_id or uuid.uuid4().hex
     content_id = str(package.get("content_id") or package.get("post_id") or uuid.uuid4().hex)
     now = _now()
     connection = _connect(data_dir)
     try:
         connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute("SELECT package_json FROM content_outbox WHERE outbox_id=?", (outbox_id,)).fetchone()
+        if existing:
+            if _decode(existing["package_json"], {}) != package:
+                raise ValueError("outbox_idempotency_payload_conflict")
+            connection.commit()
+            return outbox_id
         session = connection.execute(
             "SELECT blackboard_json FROM council_sessions WHERE decision_id=?",
             (decision_id,),
@@ -1620,7 +1644,7 @@ def reconcile_stale_claims(
             protected = connection.execute(
                 """
                 SELECT 1 FROM platform_transactions
-                WHERE outbox_id=? AND state IN ('CONFIRMED_SUCCESS', 'AMBIGUOUS', 'AUTH_ACTION_REQUIRED') LIMIT 1
+                WHERE outbox_id=? AND state IN ('REQUEST_SENT', 'AMBIGUOUS', 'AUTH_ACTION_REQUIRED') LIMIT 1
                 """,
                 (row["outbox_id"],),
             ).fetchone()

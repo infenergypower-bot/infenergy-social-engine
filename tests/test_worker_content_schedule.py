@@ -441,6 +441,8 @@ def test_main_runs_due_sweep_immediately_on_startup(monkeypatch):
     monkeypatch.setenv("CONTENT_PREGENERATION_ENABLED", "true")
     monkeypatch.setenv("CONTENT_PREGENERATION_ON_STARTUP", "true")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("META_PAGE_ID", "test-fixture")
+    monkeypatch.setenv("META_PAGE_ACCESS_TOKEN", "test-fixture")
     monkeypatch.setattr(worker, "start_health_server", lambda: None)
     monkeypatch.setattr(worker, "_load_meta_runtime_from_state", lambda: (False, "not_configured"))
     monkeypatch.setattr(worker, "_auto_bootstrap_visual_repo", lambda: {"status": "ok", "summary": {}})

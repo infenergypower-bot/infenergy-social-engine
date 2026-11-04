@@ -14,6 +14,14 @@ UI_DIR = Path(__file__).resolve().parent / "ui"
 def handle(method: str, path: str, body: dict[str, Any] | None, data_dir: str) -> tuple[int, str, bytes]:
     payload = body or {}
     try:
+        if path.startswith("/api/os/production/"):
+            from production_api import handle as production_handle
+            from production_workflow import Conflict
+            try:
+                status, result = production_handle(method, path, payload, data_dir)
+                return _json(status, result)
+            except Conflict as exc:
+                return _json(409, {"error": str(exc)})
         if method == "POST" and path == "/api/os/content-plan":
             from content_plan_120 import build_120_day_plan
 
@@ -33,11 +41,11 @@ def handle(method: str, path: str, body: dict[str, Any] | None, data_dir: str) -
                 replace_unpublished=True,
                 content_plan=CONTENT_PLAN_120,
             ))
-        service = bootstrap(data_dir)
         if method == "GET" and path in {"/os", "/os/"}:
             return _file("index.html")
         if method == "GET" and path.startswith("/os/assets/"):
             return _file(path.rsplit("/", 1)[-1])
+        service = bootstrap(data_dir)
         if method == "GET" and path == "/api/os/state":
             return _json(200, service.executive_state())
         if method == "GET" and path.startswith("/api/os/jobs/"):
@@ -204,6 +212,8 @@ def handle(method: str, path: str, body: dict[str, Any] | None, data_dir: str) -
     except ValueError as exc:
         return _json(400, {"error": str(exc)})
     except Exception as exc:
+        if path.startswith("/api/os/production/"):
+            return _json(500, {"error": type(exc).__name__, "next_action":"Review the production job and server logs; no successful delivery is being claimed."})
         return _json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
 
@@ -212,7 +222,7 @@ def _json(status: int, payload: dict[str, Any]) -> tuple[int, str, bytes]:
 
 
 def _file(name: str) -> tuple[int, str, bytes]:
-    if name not in {"index.html", "app.js", "styles.css"}:
+    if name not in {"index.html", "advanced.html", "production.js", "production.css", "app.js", "styles.css"}:
         return _json(404, {"error": "asset_not_found"})
     path = UI_DIR / name
     if not path.exists():

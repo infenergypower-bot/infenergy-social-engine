@@ -42,6 +42,9 @@ def _auth_header() -> dict:
     return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
 
 
+from publication_authorization import guarded as _editorial_guard
+
+@_editorial_guard("wordpress")
 def publish(content: dict, dry_run: bool = False) -> dict:
     wp_url = os.environ.get("WP_URL", "https://www.infenergypower.com").rstrip("/")
     if dry_run:

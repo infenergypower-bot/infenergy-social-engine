@@ -1,6 +1,8 @@
 # INF Energy Social Engine
 
-Production social publishing worker for INF Energy with a strategy-driven marketing layer.
+Audience-growth content production and social publishing for Infenergy.
+
+The default `/os` experience is the Production Desk: format-aware briefs, durable draft generation, visual text editing, review, exact-version approval, scheduling and sourced learning. The previous interface is preserved as the advanced workspace. See [Production Desk guide and migration details](docs/PRODUCTION_DESK.md).
 
 ## What It Does
 

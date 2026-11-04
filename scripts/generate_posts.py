@@ -1996,11 +1996,11 @@ def conference_selling_ideology_payload() -> dict:
     return {
         "schema_version": "v1",
         "framework_mode": "mixed_with_campaign_overlay",
-        "primary_conversion": "direct_checkout",
+        "primary_conversion": "audience_relationship",
         "tone_blend": "calm_protective_plus_assertive_urgent",
         "value_lens": "benefit_first",
-        "message_filter": "no_nonconverting_copy",
-        "cta_mode": "checkout_first",
+        "message_filter": "human_value_and_format_fit",
+        "cta_mode": "natural_response",
         "campaign_behavior": "overlay_not_replace",
         "proof_rule": "scenario_plus_spec_evidence",
         "disqualify_alternative": "patchwork_guesswork",
@@ -6244,6 +6244,13 @@ def generate(
         f"- Pillars: {ideology_pillars}\n"
         f"- Banned phrases and patterns: {ideology_banned_phrases}\n"
     )
+    from production_policy import resolve as resolve_creative_policy
+    policy_format = os.environ.get("POST_CONTENT_FORMAT", "educational_story_carousel")
+    policy_objective = os.environ.get("POST_CONTENT_OBJECTIVE", "audience_growth")
+    creative_policy = resolve_creative_policy(policy_format, objective=policy_objective)
+    # Persisted sales defaults remain readable for migration, but cannot override
+    # the owner's audience-growth mandate in a non-conversion post.
+    ideology_context = "RESOLVED CREATIVE DIRECTIVES (supersede legacy selling defaults):\n" + json.dumps(creative_policy, ensure_ascii=False) + "\n"
 
     # Phase B: build the strategic brief context that instructs the copywriter to obey
     # the conversion logic engine's decisions (awareness, law, emotion, copy structure).

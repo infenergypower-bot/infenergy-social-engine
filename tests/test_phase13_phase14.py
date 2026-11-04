@@ -236,12 +236,16 @@ class PhaseThirteenFourteenTests(unittest.TestCase):
         self.assertEqual(readiness["checks"]["facebook"]["status"], "green")
         self.assertEqual(readiness["overall"], "pass")
 
-    def test_generate_without_gemini_keeps_orchestration_unblocked_with_fallbacks(self) -> None:
+    def test_generate_without_gemini_keeps_unapproved_draft_available(self) -> None:
         with patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=False):
             content = generate_posts.generate("morning", pipeline_override="legacy")
         self.assertFalse(bool(content.get("orchestration_blocked")))
-        control = content.get("agent_control_plane", {})
-        self.assertEqual(control.get("global_gate", {}).get("status"), "pass")
+        self.assertEqual(content.get("copy_generation_source"), "deterministic_fallback")
+        self.assertFalse(content.get("production_approval"))
+        from publication_authorization import authorize
+        with patch.dict(os.environ, {"EDITORIAL_APPROVAL_MODE":"required"}):
+            with self.assertRaisesRegex(ValueError,"editorial_approval_required"):
+                authorize(content,"facebook")
 
     def test_phase2_creative_stack_fallback_is_schema_valid(self) -> None:
         stack = generate_posts._run_phase2_creative_stack(
