@@ -1321,6 +1321,8 @@ def _generate_gemini_full_creative(
 
         contents: Any = [prompt, *reference_parts] if reference_parts else prompt
         repair_attempts = max(0, min(int(os.environ.get("GEMINI_IMAGE_REPAIR_ATTEMPTS", "0")), 5))
+        from social.post_candidates import automatic as replace_failed_posts
+        if replace_failed_posts():repair_attempts=0  # A rejection goes back to a new post, never another image repair.
         requested_attempts = repair_attempts + 1
         remaining = budget_snapshot()
         available_attempts = min(
@@ -1569,9 +1571,14 @@ def generate_strict_gemini_image(
     }
     rendered, reason, metadata = _generate_gemini_full_creative(content, platform, plan, output_path)
     if not rendered or metadata.get("generation_status") != "success":
+        from social.post_candidates import automatic, CandidateQualityError
+        if automatic() and any(marker in reason for marker in ('semantic_quality_rejected:','plate_quality_rejected:')) and 'api_exception:' not in reason:
+            raise CandidateQualityError('visual',{'status':'BLOCKED','blockers':[{'criterion':'visual','issue':reason,'fix':'Develop a different, simpler complete post that addresses the failure.'}],'rejected_artifacts':metadata.get('rejected_artifacts',[])})
         raise RuntimeError(f"gemini_generation_failed:{reason}")
     review = review_rendered_visual(output_path, platform)
     if review.get("verdict") != "PASS":
+        from social.post_candidates import automatic, CandidateQualityError
+        if automatic():raise CandidateQualityError('visual',{'status':'BLOCKED','blockers':[{'criterion':'visual','issue':str(review.get('issues') or []),'fix':'Develop a different complete post that meets the artifact requirements.'}],'rejected_artifacts':[output_path]})
         raise RuntimeError(f"gemini_artifact_qa_failed:{','.join(review.get('issues') or [])}")
     return {
         "render_engine": "gemini",

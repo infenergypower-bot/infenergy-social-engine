@@ -49,6 +49,8 @@ def inventory_snapshot(data_dir: str, *, days: int = 14) -> list[dict]:
     for row in rows:
         item = dict(row)
         package = json.loads(item.pop('package_json'))
+        from social.post_candidates import summary as candidate_summary
         result.append({**item, 'title': package.get('title') or package.get('thought_statement') or package.get('topic') or item['outbox_id'],
+                       'candidate_recovery':candidate_summary(package),
                        'platforms': configured_platforms(package), 'platform_schedule': package.get('platform_schedule') or {}})
     return result

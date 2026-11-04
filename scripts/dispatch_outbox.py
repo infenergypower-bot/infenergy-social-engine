@@ -35,10 +35,12 @@ from content_operations import (
     upcoming_ready_packages,
     update_claimed_package,
     update_ready_package,
+    replace_rejected_candidate,
 )
 from publication_contract import PackageState
 from runtime_config import load_runtime_config
 from social.gemini_budget import GeminiBudgetExceeded, preflight_gemini_workflow
+from social.post_candidates import CandidateQualityError
 
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
 FORBIDDEN_PUBLIC_LABELS = ("POV:", "FIELD TRUTH")
@@ -334,6 +336,8 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
             "cta": contract.get("cta") or thought.get("action"),
         },
     }
+    from social.post_candidates import replacement_brief
+    if replacement_brief(package):brief['replacement_post']=replacement_brief(package)
     from agents.dispatcher import run_agent
     author_receipt = run_agent("on_image_text_author", data_dir, {"brief": brief})
     if author_receipt.get("error"):
@@ -376,6 +380,8 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
     clarity_issues = _copy_clarity_issues(result)
     if clarity_issues:
         raise RuntimeError(f"gemini_copy_clarity_rejected:{','.join(clarity_issues)}")
+    from social.post_candidates import require_fresh_post
+    require_fresh_post(package,result)
 
     thought.update({
         "statement": str(result["statement"]).strip(),
@@ -385,6 +391,9 @@ def _prepare_gemini_copy(package: dict[str, Any], data_dir: str = DATA_DIR) -> d
         "action": str(result["action"]).strip(),
         "image_scene": str(result["image_scene"]).strip(),
     })
+    if package.get('candidate_recovery'):
+        package['title']=str(visible['headline']).strip()
+        package['candidate_recovery']['status']='REPLACEMENT_DRAFTED'
     contract["visible_text"] = {key: str(visible[key]).strip() for key in ("headline", "infenergy_line", "resolution_line")}
     contract['typography_design']=result['typography_design']
     thought["generation_contract"] = contract
@@ -462,6 +471,8 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
     public_dir = os.path.join(data_dir, "public_media")
     os.makedirs(public_dir, exist_ok=True)
     post_id = str(package.get("post_id") or package.get("content_id") or "monthly")
+    if package.get('candidate_recovery'):
+        post_id += '_candidate_' + str(package['candidate_recovery']['candidate_number'])
     generation_platform = {
         "9:16": "iis_reel_cover",
         "4:5": "iis_carousel",
@@ -539,6 +550,7 @@ def _prepare_gemini_assets(package: dict[str, Any], data_dir: str) -> dict[str, 
 
 def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = None) -> dict[str, Any]:
     from social import production_quality as quality
+    from social import post_candidates as candidates
     targeted = bool(outbox_id)
     lead_minutes = load_runtime_config().preparation_lead_time_minutes
     now_utc = datetime.now(timezone.utc)
@@ -559,8 +571,18 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
             assert_not_scrapped(package, data_dir)
         except ValueError:
             continue
-        if os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic' and row.get('lifecycle_state') in {'FAILED_PREPARATION', 'QA_REJECTED'} and not targeted:
-            continue  # A non-budget failure needs inspection, not an automatic paid retry loop.
+        if candidates.automatic():
+            recovery=package.get('candidate_recovery') or {}
+            if recovery.get('status')=='REPLACEMENT_QUEUED' and recovery.get('next_candidate_at') and datetime.fromisoformat(recovery['next_candidate_at'])>now_utc:
+                continue
+            if row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED'} and recovery.get('status')!='REPLACEMENT_QUEUED' and not targeted:
+                failure=candidates.rejection(package)
+                if not failure:continue  # Credential, provider and configuration errors need repair, not new creative.
+                replacement=candidates.replace(package,failure)
+                queued=replace_rejected_candidate(data_dir,str(row['outbox_id']),package,replacement)
+                return {'status':'REPLACEMENT_QUEUED' if queued else 'DEFERRED','outbox_id':row['outbox_id']}
+        elif os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic' and row.get('lifecycle_state') in {'FAILED_PREPARATION','QA_REJECTED'} and not targeted:
+            continue
         if package.get("weekly_role") == "current_news":
             scheduled_at = datetime.fromisoformat(str(row["scheduled_at"]).replace("Z", "+00:00"))
             if scheduled_at > news_before_utc:
@@ -578,10 +600,13 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
             lifecycle_state = row.get("lifecycle_state")
             image_calls=0 if images_ready else required_count
             quality_calls=int(not quality.current(package,data_dir,'plan'))+int(not quality.current(package,data_dir,'release') or not media_ready) if quality.enabled() else 0
+            # Screen replacement concepts with text calls even when today's image budget is empty.
+            screening=candidates.automatic() and not quality.current(package,data_dir,'plan')
+            preflight_images=0 if screening else image_calls
+            reasoning_calls=(0 if _gemini_copy_ready(package) else 1)+1 if screening else image_calls+(0 if _gemini_copy_ready(package) else 1)+quality_calls
             if lifecycle_state == PackageState.BLOCKED_BUDGET.value:
-                reasoning_calls = image_calls + (0 if _gemini_copy_ready(package) else 1) + quality_calls
                 try:
-                    preflight_gemini_workflow(image_calls=image_calls, reasoning_calls=reasoning_calls)
+                    preflight_gemini_workflow(image_calls=preflight_images, reasoning_calls=reasoning_calls)
                 except GeminiBudgetExceeded as exc:
                     budget_blocked_result = {
                         "status": PackageState.BLOCKED_BUDGET.value,
@@ -602,8 +627,7 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
                 transition_package(data_dir,outbox_id,PackageState.PREPARATION_REQUIRED.value,'PRODUCTION_QUALITY_REVIEW_REQUIRED',actor='dispatch_outbox.pregenerate')
             transition_package(data_dir, outbox_id, PackageState.PREPARING.value, "PREPARATION_WINDOW_OPEN", actor="dispatch_outbox.pregenerate")
             if os.environ.get('EDITORIAL_APPROVAL_MODE') == 'automatic':
-                preflight_gemini_workflow(image_calls=image_calls,
-                    reasoning_calls=image_calls + (0 if _gemini_copy_ready(package) else 1) + quality_calls)
+                preflight_gemini_workflow(image_calls=preflight_images,reasoning_calls=reasoning_calls)
             existing_approval = package.get("product_image_approval")
             package = _hydrate_product_image_approval(package)
             if package.get("product_image_approval") != existing_approval and not update_ready_package(data_dir, outbox_id, package):
@@ -616,19 +640,38 @@ def pregenerate_upcoming(*, data_dir: str = DATA_DIR, outbox_id: str | None = No
             if quality.enabled():
                 reviewed=quality.review(package,data_dir,'plan')
                 if not update_ready_package(data_dir,outbox_id,package):return {'status':'DEFERRED','outbox_id':outbox_id}
-                if reviewed['status']!='PASS':raise RuntimeError('production_quality_plan_blocked')
+                if reviewed['status']!='PASS':
+                    if reviewed.get('review_complete') is False:raise RuntimeError('production_quality_review_incomplete')
+                    raise CandidateQualityError('plan',reviewed)
+            if candidates.automatic():
+                image_calls=0 if _gemini_assets_ready(package,int(package['gemini_generation'].get('required_image_count') or 0)) else int(package['gemini_generation'].get('required_image_count') or 0)
+                preflight_gemini_workflow(image_calls=image_calls,reasoning_calls=image_calls+int(not quality.current(package,data_dir,'release') or not _delivery_media_ready(package)))
             prepared = _prepare_gemini_assets(package, data_dir)
+            package = prepared
             if not update_ready_package(data_dir, outbox_id, prepared):
                 return {"status": "DEFERRED", "outbox_id": outbox_id, "detail": "package_no_longer_ready"}
             if quality.enabled():
                 reviewed=quality.review(prepared,data_dir,'release')
                 if not update_ready_package(data_dir,outbox_id,prepared):return {'status':'DEFERRED','outbox_id':outbox_id}
-                if reviewed['status']!='PASS':raise RuntimeError('production_quality_release_blocked')
+                if reviewed['status']!='PASS':
+                    if reviewed.get('review_complete') is False:raise RuntimeError('production_quality_review_incomplete')
+                    raise CandidateQualityError('release',reviewed)
             transition_package(data_dir, outbox_id, PackageState.AWAITING_QA.value, "CREATIVE_GENERATED", actor="dispatch_outbox.pregenerate")
             readiness = evaluate_outbox_readiness(data_dir, outbox_id, dispatch_enabled=True, actor="dispatch_outbox.pregenerate")
+            if candidates.automatic() and not readiness['ready'] and readiness['state']=='QA_REJECTED':
+                raise CandidateQualityError('readiness',readiness)
             transition_package(data_dir, outbox_id, readiness["state"], "READINESS_PASSED" if readiness["ready"] else readiness["reason_codes"][0], actor="dispatch_outbox.pregenerate", detail=readiness)
             return {"status": "PREGENERATED", "outbox_id": outbox_id}
         except Exception as exc:
+            if candidates.automatic():
+                copy_error=str(exc).removeprefix('on_image_text_author_failed:')
+                copy_failure=copy_error.startswith(('gemini_copy_schema_invalid:','gemini_copy_forbidden_label:','gemini_copy_caption_too_long','gemini_copy_visible_text_too_long:','gemini_copy_generic_headline','gemini_copy_clarity_rejected:','gemini_copy_claims_rejected:','invalid_typography_design_','typography_emphasis_must_be_words'))
+                if isinstance(exc,CandidateQualityError) or copy_failure:
+                    failure=exc if isinstance(exc,CandidateQualityError) else CandidateQualityError('copy',{'status':'BLOCKED','blockers':[{'criterion':'copy','issue':str(exc),'fix':'Develop a different complete post that meets the copy and factual requirements.'}]})
+                    if not update_ready_package(data_dir,outbox_id,package):return {'status':'DEFERRED','outbox_id':outbox_id}
+                    replacement=candidates.replace(package,failure)
+                    queued=replace_rejected_candidate(data_dir,outbox_id,package,replacement)
+                    return {'status':'REPLACEMENT_QUEUED' if queued else 'DEFERRED','outbox_id':outbox_id,'candidate_number':replacement['candidate_recovery']['candidate_number'],'reason_code':'NEW_POST_REPLACES_REJECTED_CANDIDATE'}
             error = f"{type(exc).__name__}:{exc}"
             if "budget" in error.lower() or "exhausted" in error.lower():
                 state, reason = PackageState.BLOCKED_BUDGET.value, "AI_BUDGET_EXHAUSTED"

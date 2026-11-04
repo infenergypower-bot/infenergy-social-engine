@@ -64,6 +64,9 @@ def packet(package, data_dir, *, include_assets=False):
         from social.type_design import resolve
         designs=[resolve(format_id=package['rules'].get('format_id',''),lines=package['image_text'])]
     if designs:result['typography_design']=designs
+    if package.get('candidate_recovery'):
+        from social.post_candidates import replacement_brief
+        result['replacement_post']=replacement_brief(package)
     source=Path(__file__).resolve().parents[2]/'data/marketing/infenergy_company_knowledge.json'
     company=json.loads(source.read_text(encoding='utf-8'))
     result['brand_context']={k:company.get(k) for k in ('brand','values','product_truth_policy')}
@@ -141,6 +144,7 @@ def decision(response, subject, stage, model):
                 blockers.append({'criterion':'review','issue':'A finding is incomplete.','fix':'Record the issue and a concrete correction.'})
             else:blockers.append({k:finding[k][:2000] for k in ('criterion','issue','fix')})
     return {'version':VERSION,'stage':stage,'status':'BLOCKED' if blockers else 'PASS',
+        'review_complete':len(scores)==len(criteria) and len(evidence)==len(criteria) and isinstance(findings,list) and all(isinstance(f,dict) and all(isinstance(f.get(k),str) and f[k].strip() for k in ('criterion','issue','fix')) for f in findings),
         'subject_sha256':digest(subject),'scores':scores,'evidence':evidence,'blockers':blockers,
         'model':model,'checked_at':datetime.now(timezone.utc).isoformat()}
 
@@ -163,6 +167,7 @@ def review(package, data_dir, stage):
         'Captions should add context or usefulness, not repeat the image. Humor and product-free stories do not need a forced sale, product, question, or brand word. '
         'For a product, require verified identity, a credible supported role, and honest boundaries. Never infer runtime, compatibility, automatic backup, direct battery charging, or invented Infenergy hardware/services. '
         'An honest setup or compatibility-check scene is valid when no powered connection is established by the sources. '
+        'When replacement_post is present, compare the new premise, human moment, payoff and scene with the rejected posts. Reject a paraphrase or cosmetic reskin of a rejected idea. The replacement needs a different worthwhile concept, not another image of the same post. '
         'For a finished image, read every declared line against the actual pixels and check phone-size hierarchy, anatomy, cables, physical connections, labels and distracting background lettering. '
         'Only exact_image_text declares required lettering; other copy in the packet is context, not additional wording to render. '
         'When typography_design is supplied, assess lettering against that art direction. Require distinctive letterforms, a coherent type personality, purposeful hierarchy and emphasis, and placement that contributes to the idea. Plain white all-caps text or a color change alone is not sufficient. A restrained design can have character without novelty effects. Never trade exact spelling or phone readability for decoration. '
@@ -207,6 +212,7 @@ def require(package,data_dir):
 
 
 def dashboard(data_dir):
+    from social.post_candidates import summary as candidate_summary
     import sqlite3
     from inventory_db import get_db_path
     from posting_schedule import CENTRAL_TIME
@@ -226,9 +232,11 @@ def dashboard(data_dir):
         records.append({'id':row['outbox_id'],'title':p.get('title') or (lines[0] if lines else None) or p.get('thought_statement') or p.get('topic') or 'Scheduled creative',
             'scheduled_at':row['scheduled_at'],'state':row['lifecycle_state'],'status':status,'fresh':fresh,
             'plan':assessments.get('plan'),'release':assessments.get('release'),
+            'candidate_recovery':candidate_summary(p),
             'typography_design':[(p.get('v5_direction') or {}).get('typography_design') for p in prompts if (p.get('v5_direction') or {}).get('typography_design')],
             'preview':'/media/'+Path(assets[0].get('local_path') or assets[0].get('path') or '').name if assets and isinstance(assets[0],dict) and (assets[0].get('local_path') or assets[0].get('path')) else None,
             'caption':((p.get('platform_posts') or {}).get('facebook') or {}).get('final_caption') or p.get('fb_caption') or ''})
     from social.type_design import STYLES
-    return {'enabled':enabled(),'version':VERSION,'criteria':CRITERIA,'typography_styles':STYLES,'minimum_score':4,'exact_score_criteria':['truth','text'],
+    from social.post_candidates import automatic
+    return {'enabled':enabled(),'automatic_replacement':automatic(),'version':VERSION,'criteria':CRITERIA,'typography_styles':STYLES,'minimum_score':4,'exact_score_criteria':['truth','text'],
         'records':records,'note':'AI editorial assessments can miss issues. A passing review binds the exact copy and finished pixels; it is not a guarantee of audience response.'}

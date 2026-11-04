@@ -1357,6 +1357,38 @@ def update_ready_package(data_dir: str, outbox_id: str, package: dict[str, Any])
         connection.close()
 
 
+def replace_rejected_candidate(data_dir: str, outbox_id: str, expected: dict, replacement: dict) -> bool:
+    """Atomically replace unpublished work without changing its slot or receipts."""
+    from publication_authorization import assert_not_scrapped
+    assert_not_scrapped(expected, data_dir)
+    connection = _connect(data_dir)
+    try:
+        connection.execute('BEGIN IMMEDIATE')
+        row = connection.execute('SELECT status,package_json,lifecycle_state FROM content_outbox WHERE outbox_id=?', (outbox_id,)).fetchone()
+        if not row or row['status'] != 'READY' or _decode(row['package_json'], {}) != expected:
+            return False
+        if row['lifecycle_state'] not in {'PREPARING','AWAITING_QA','QA_REJECTED','FAILED_PREPARATION'}:
+            return False
+        if connection.execute("SELECT 1 FROM platform_transactions WHERE outbox_id=? AND state IN ('REQUEST_SENT','CONFIRMED_SUCCESS','AMBIGUOUS') LIMIT 1", (outbox_id,)).fetchone():
+            return False
+        if row['lifecycle_state'] == 'FAILED_PREPARATION':
+            _record_transition(connection,outbox_id=outbox_id,destination='PREPARATION_REQUIRED',reason_code='NEW_POST_REPLACES_REJECTED_CANDIDATE',actor='post_candidates')
+            _record_transition(connection,outbox_id=outbox_id,destination='PREPARING',reason_code='REPLACEMENT_INITIALIZED',actor='post_candidates')
+        if row['lifecycle_state'] != 'QA_REJECTED':
+            if row['lifecycle_state'] != 'AWAITING_QA':
+                _record_transition(connection,outbox_id=outbox_id,destination='AWAITING_QA',reason_code='POST_CANDIDATE_REVIEWED',actor='post_candidates')
+            _record_transition(connection,outbox_id=outbox_id,destination='QA_REJECTED',reason_code='NEW_POST_CANDIDATE_QUEUED',actor='post_candidates',detail={'candidate_number':replacement['candidate_recovery']['candidate_number']})
+        connection.execute("UPDATE content_outbox SET package_json=?,readiness_json='{}',last_error=NULL,next_attempt_at=NULL WHERE outbox_id=?", (_json(replacement),outbox_id))
+        connection.execute("UPDATE asset_reservations SET reservation_state='RELEASED',updated_at=? WHERE outbox_id=? AND reservation_state='RESERVED'", (_now(),outbox_id))
+        connection.commit()
+        return True
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
 def begin_platform_transaction(
     data_dir: str,
     *,

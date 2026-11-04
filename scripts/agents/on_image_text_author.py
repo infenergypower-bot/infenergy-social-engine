@@ -55,6 +55,8 @@ def author(brief: dict[str, Any]) -> dict[str, Any]:
         f"FACTUAL BRIEF:\n{json.dumps(brief, ensure_ascii=True, sort_keys=True)}"
     )
     if quality_enabled():
+        if brief.get('replacement_post'):
+            prompt+='\nREPLACEMENT TASK: Develop an entirely new post premise, situation, useful payoff, scene and all copy. Do not paraphrase the rejected post, preserve its hook, or repair its image. Use the factual brief and the rejection findings to choose a better idea within the same format and verified product boundaries.\n'
         prompt=prompt.replace('Each of the three platform captions must include the exact standalone word Infenergy.',
             'Use Infenergy naturally when it contributes meaning; do not force a brand mention into every caption.')
         prompt=prompt.replace('image_scene must name a specific person, place, activity, power interruption, and visible product use that resolves the moment.',

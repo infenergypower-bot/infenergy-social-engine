@@ -8,6 +8,7 @@ from unittest.mock import patch
 import sys
 import types
 import google
+import pytest
 
 from PIL import Image
 
@@ -278,7 +279,8 @@ def test_local_character_reference_reaches_gemini(tmp_path, monkeypatch):
     assert any(isinstance(part, dict) and part.get("data") for part in calls[0][1:])
 
 
-def test_gemini_repairs_are_limited_by_remaining_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize('automatic_replacement',[False,True])
+def test_gemini_repairs_are_limited_by_remaining_budget(tmp_path, monkeypatch, automatic_replacement):
     output_path = tmp_path / "budgeted.png"
     image_buffer = io.BytesIO()
     Image.new("RGB", (1080, 1350), "#d8e0e4").save(image_buffer, format="PNG")
@@ -305,13 +307,16 @@ def test_gemini_repairs_are_limited_by_remaining_budget(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "google.genai.types", fake_types)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("GEMINI_IMAGE_REPAIR_ATTEMPTS", "2")
+    if automatic_replacement:
+        monkeypatch.setenv('EDITORIAL_APPROVAL_MODE','automatic')
+        monkeypatch.setenv('PRODUCTION_QUALITY_ENABLED','true')
     monkeypatch.setattr(social_visuals, "_GEMINI_IMAGE_UNAVAILABLE_REASON", "")
     monkeypatch.setattr(social_visuals, "_load_visual_repo_context", lambda: {"references": [], "settings": {}})
     monkeypatch.setattr(social_visuals, "_gemini_plate_quality", lambda *_args: (True, []))
-    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args, **_kwargs: (True, []))
+    monkeypatch.setattr(social_visuals, "_gemini_semantic_plate_quality", lambda *_args, **_kwargs: (False, ['text_spelling']) if automatic_replacement else (True, []))
     monkeypatch.setattr(social_visuals, "budget_snapshot", lambda: {
-        "image": {"remaining": 1},
-        "total": {"remaining": 2},
+        "image": {"remaining": 3 if automatic_replacement else 1},
+        "total": {"remaining": 8 if automatic_replacement else 2},
     })
     monkeypatch.setattr(social_visuals, "preflight_gemini_workflow", lambda **kwargs: preflight_calls.append(kwargs))
 
@@ -322,8 +327,8 @@ def test_gemini_repairs_are_limited_by_remaining_budget(tmp_path, monkeypatch):
         str(output_path),
     )
 
-    assert rendered is True
-    assert reason == "ok"
+    assert rendered is (not automatic_replacement)
+    assert ('semantic_quality_rejected:' in reason) if automatic_replacement else reason == 'ok'
     assert metadata["image_provider_call_count"] == 1
     assert preflight_calls == [{"image_calls": 1, "reasoning_calls": 1}]
 

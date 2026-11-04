@@ -45,7 +45,8 @@ def text_stage(store, job, payload):
             schema+=" StoryPage exception: storyboard contains ONE page with panels:[{action,dialogue,speaker}] of exactly four panels. The first panel is the hero panel; subsequent panels progress top-to-bottom to an earned brand ending. Dialogue is at most 10 words per panel. image_text contains ONE string joining the exact panel dialogue in reading order. Generate each exact dialogue line inside its corresponding panel as part of the original artwork."
     else:
         schema="Return JSON {captions: {"+",".join(p+': string' for p in payload["platforms"])+"}}. Captions add meaning beyond the declared image text. Respect the format, no forced sale or question, no universal paragraph/hashtag minimum."
-    prompt=json.dumps({"task":schema,"owner_sources":owner,"rules":rules,"brief":payload["brief"],"locked_concept":payload["concept"],"image_text":payload["image_text"],"product_evidence":payload["evidence"],"product_sources":product_sources,"references":references,"examples":examples,"recent_concepts":recent},ensure_ascii=False)
+    from social.post_candidates import replacement_brief
+    prompt=json.dumps({"task":schema,"owner_sources":owner,"rules":rules,"brief":payload["brief"],"locked_concept":payload["concept"],"replacement_post":replacement_brief(payload),"image_text":payload["image_text"],"product_evidence":payload["evidence"],"product_sources":product_sources,"references":references,"examples":examples,"recent_concepts":recent},ensure_ascii=False)
     result=model_router.generate_json("topic_generation" if job["stage"]=="concept" else "copy_editing",prompt,system_instruction="You are Infenergy's creative editor. Honor explicit owner direction and canonical source precedence. Draft content only; do not claim approval, publication or viral outcomes.")
     if not isinstance(result,dict): raise ValueError("text_generation_unavailable_check_model_route_or_credentials")
     provenance=list(payload.get("provenance",[]))+[{"stage":job["stage"],"provider":"gemini","model_route":model_router.route_for("topic_generation" if job["stage"]=="concept" else "copy_editing"),"prompt_sha256":digest(prompt),"rules_digest":rules["digest"],"sources":[{"path":s["path"],"sha256":s["sha256"]} for s in source["sources"]],"reference_ids":payload["references"],"created_at":now()}]
@@ -213,6 +214,12 @@ def run_one(store, owner="worker"):
             if job['stage']=='quality' and (payload.get('production_quality') or {}).get('plan',{}).get('status')=='PASS':
                 review(payload,store.data_dir,'release')
             updates={'production_quality':payload.get('production_quality',{})}
+            from social import post_candidates as candidates
+            failure=candidates.rejection(payload)
+            if failure and candidates.automatic():
+                if failure.review.get('review_complete') is False:raise ValueError('production_quality_review_incomplete')
+                updates=candidates.replace(payload,failure)
+                result={'replace_candidate':True}
         elif job["stage"]=="inspect":
             from production_typography import inspect_text
             from PIL import Image,ImageOps
@@ -238,6 +245,16 @@ def run_one(store, owner="worker"):
     except Exception as exc:
         from production_workflow import Conflict
         if isinstance(exc,Conflict):return True
+        from social import post_candidates as candidates
+        if isinstance(exc,candidates.CandidateQualityError) and candidates.automatic():
+            updates=candidates.replace(payload,exc);result={'replace_candidate':True}
+            receipt.parent.mkdir(parents=True,exist_ok=True)
+            temporary=receipt.with_suffix('.tmp')
+            temporary.write_text(json.dumps({'revision':job['revision'],'updates':updates,'result':result}))
+            os.replace(temporary,receipt)
+            try:store.finish(job,updates=updates,result=result)
+            except Conflict:pass
+            return True
         # Keep provider URLs, credentials and exception bodies out of the audit log.
         code=str(exc) if type(exc) is ValueError else type(exc).__name__
         try:store.finish(job,error=code[:300],retryable=False)

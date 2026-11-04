@@ -108,11 +108,12 @@ def test_failed_plan_never_spends_on_an_image(work,monkeypatch):
     monkeypatch.setattr(dispatch_outbox,'upcoming_ready_packages',lambda *a,**k:[{'outbox_id':'one','scheduled_at':'2030-01-01T12:00:00+00:00','lifecycle_state':'PREPARATION_REQUIRED','package':package}])
     monkeypatch.setattr(dispatch_outbox,'transition_package',lambda *a,**k:None)
     monkeypatch.setattr(dispatch_outbox,'update_ready_package',lambda *a,**k:True)
+    monkeypatch.setattr(dispatch_outbox,'replace_rejected_candidate',lambda *a,**k:True)
     monkeypatch.setattr(quality,'review',lambda p,*_:{'status':'BLOCKED'})
     monkeypatch.setattr(dispatch_outbox,'_prepare_gemini_assets',lambda *a,**k:pytest.fail('Image generation must not run after a failed plan.'))
     result=dispatch_outbox.pregenerate_upcoming(data_dir=root)
-    assert result['status']=='FAILED_PREPARATION'
-    assert 'quality_plan_blocked' in result['error']
+    assert result['status']=='REPLACEMENT_QUEUED'
+    assert result['candidate_number']==2
 
 
 def test_durable_draft_stops_before_images_when_plan_review_is_blocked(work):

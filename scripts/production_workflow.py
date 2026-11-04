@@ -430,11 +430,14 @@ class Production:
                 c.execute("UPDATE production_packages SET state='SCHEDULED',outbox_id=?,updated_at=? WHERE id=?", (result["outbox_id"], now(), row["id"]))
             c.execute("UPDATE production_jobs SET state=?,result=?,error=?,owner=NULL,lease_until=NULL,available_at=? WHERE id=?", (state, json.dumps(result or {}), error, (datetime.now(timezone.utc)+timedelta(seconds=60*owned["attempts"])).isoformat(), job["id"]))
             remaining=json.loads(owned["next_stages"])
-            if (updates or {}).get('production_quality',{}).get('plan',{}).get('status')=='BLOCKED':remaining=[]
+            replacing=bool((result or {}).get('replace_candidate'))
+            if replacing:remaining=['concept','caption','quality_plan']+['visual']*p['rules']['cards']+['inspect','quality']
+            elif (updates or {}).get('production_quality',{}).get('plan',{}).get('status')=='BLOCKED':remaining=[]
             if state=="SUCCEEDED" and remaining:
                 next_revision=row["revision"]+int(bool(updates))
                 next_id=uuid.uuid4().hex
-                c.execute("INSERT INTO production_jobs(id,package_id,revision,stage,state,available_at,created_at,next_stages) VALUES(?,?,?,?,'QUEUED',?,?,?)",(next_id,row["id"],next_revision,remaining[0],now(),now(),json.dumps(remaining[1:])))
+                available=updates['candidate_recovery']['next_candidate_at'] if replacing else now()
+                c.execute("INSERT INTO production_jobs(id,package_id,revision,stage,state,available_at,created_at,next_stages) VALUES(?,?,?,?,'QUEUED',?,?,?)",(next_id,row["id"],next_revision,remaining[0],available,now(),json.dumps(remaining[1:])))
                 self.event(c,row["id"],"JOB_QUEUED",{"stage":remaining[0],"job_id":next_id,"source":"draft_sequence"},"worker")
             self.event(c, row["id"], "JOB_"+state, {"stage": job["stage"], "error": error}, "worker")
 
