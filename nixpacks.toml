@@ -1,2 +1,2 @@
 [phases.setup]
-nixPkgs = ["python312", "ffmpeg", "espeak-ng", "dejavu_fonts"]
+nixPkgs = ["python312", "ffmpeg", "espeak-ng", "dejavu_fonts", "fontconfig", "tesseract"]
