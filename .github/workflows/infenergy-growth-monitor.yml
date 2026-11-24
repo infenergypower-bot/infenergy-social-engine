@@ -1,0 +1,25 @@
+name: Infenergy public health monitor
+on:
+  pull_request:
+    paths:
+      - 'growth-os/**'
+      - '.github/workflows/infenergy-growth-monitor.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '15 13 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: infenergy-public-health
+  cancel-in-progress: false
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 growth-os/test_monitor.py
+      - name: Live public smoke checks
+        if: github.event_name != 'pull_request'
+        run: python3 growth-os/monitor.py
